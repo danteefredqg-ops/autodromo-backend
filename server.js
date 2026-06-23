@@ -1,12 +1,23 @@
 // server.js - Autódromo Monterrey API
-const express   = require("express");
-const cors      = require("cors");
-const bcrypt    = require("bcryptjs");
-const jwt       = require("jsonwebtoken");
-const db        = require("./configuracion/db");
+const express    = require("express");
+const cors       = require("cors");
+const bcrypt     = require("bcryptjs");
+const jwt        = require("jsonwebtoken");
+const rateLimit  = require("express-rate-limit");
+const db         = require("./configuracion/db");
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
+
+// ─── Validación de variables de entorno ───────────────────────────────────────
+const ENV_REQUERIDOS = ["MYSQLHOST", "MYSQLUSER", "MYSQLPASSWORD", "MYSQLDATABASE"];
+const faltantes = ENV_REQUERIDOS.filter((v) => !process.env[v]);
+if (faltantes.length) {
+  console.warn(`⚠️  Variables de entorno faltantes: ${faltantes.join(", ")}`);
+}
+if (!process.env.JWT_SECRET) {
+  console.warn("⚠️  JWT_SECRET no configurado — usando clave de desarrollo. CAMBIAR en producción.");
+}
 const JWT_SECRET = process.env.JWT_SECRET || "autodromo_mty_secret_2024";
 
 // ─── Middleware ────────────────────────────────────────────────────────────────
@@ -15,6 +26,23 @@ app.use(cors({
   credentials: true,
 }));
 app.use(express.json());
+
+// ─── Rate limiting ────────────────────────────────────────────────────────────
+const loginLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 15,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Demasiados intentos de acceso. Intenta de nuevo en 15 minutos." },
+});
+
+const autoRegistroLimit = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Demasiadas solicitudes. Espera un momento antes de intentar de nuevo." },
+});
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function autenticar(req, res, next) {
@@ -167,14 +195,19 @@ async function inicializarBD() {
 }
 
 // ─── Health ───────────────────────────────────────────────────────────────────
-app.get("/api/health", (req, res) => {
-  res.json({ ok: true, mensaje: "Autódromo Monterrey API activa", hora: new Date() });
+app.get("/api/health", async (req, res) => {
+  try {
+    await db.query("SELECT 1");
+    res.json({ ok: true, mensaje: "Autódromo Monterrey API activa", hora: new Date() });
+  } catch {
+    res.status(503).json({ ok: false, error: "Base de datos no disponible" });
+  }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // AUTH
 // ═══════════════════════════════════════════════════════════════════════════════
-app.post("/api/auth/login", async (req, res) => {
+app.post("/api/auth/login", loginLimit, async (req, res) => {
   try {
     const { username, password } = req.body;
     if (!username || !password) {
@@ -312,6 +345,9 @@ app.put("/api/pilotos/:id", autenticar, autorizar("admin", "inscripciones"), asy
       nacionalidad, estatus_licencia, numero_licencia, fecha_nacimiento,
       contacto_emergencia, telefono_emergencia, notas,
     } = req.body;
+    if (!nombre_completo || !tipo_sangre) {
+      return res.status(400).json({ error: "Nombre y tipo de sangre requeridos" });
+    }
     await db.query(
       `UPDATE pilotos SET
         nombre_completo = ?, telefono = ?, email = ?, tipo_sangre = ?,
@@ -429,9 +465,10 @@ app.post("/api/carreras", autenticar, autorizar("admin"), async (req, res) => {
   }
 });
 
-app.put("/api/carreras/:id", autenticar, autorizar("admin", "inscripciones"), async (req, res) => {
+app.put("/api/carreras/:id", autenticar, autorizar("admin"), async (req, res) => {
   try {
     const { nombre, fecha, ubicacion, descripcion } = req.body;
+    if (!nombre || !fecha) return res.status(400).json({ error: "Nombre y fecha requeridos" });
     await db.query(
       "UPDATE carreras SET nombre = ?, fecha = ?, ubicacion = ?, descripcion = ? WHERE id = ?",
       [nombre, fecha, ubicacion || "Autódromo Monterrey", descripcion || null, req.params.id]
@@ -480,6 +517,13 @@ app.post("/api/inscripciones", autenticar, autorizar("admin", "inscripciones"), 
     const { piloto_id, carrera_id, categoria_id, numero_piloto, vehiculo, modelo_vehiculo } = req.body;
     if (!piloto_id || !carrera_id || !categoria_id || !numero_piloto || !vehiculo) {
       return res.status(400).json({ error: "Campos obligatorios incompletos" });
+    }
+    const [yaInscrito] = await db.query(
+      "SELECT id FROM inscripciones WHERE piloto_id = ? AND carrera_id = ? LIMIT 1",
+      [piloto_id, carrera_id]
+    );
+    if (yaInscrito.length > 0) {
+      return res.status(409).json({ error: "Este piloto ya está inscrito en esta carrera" });
     }
     const [result] = await db.query(
       `INSERT INTO inscripciones (piloto_id, carrera_id, categoria_id, numero_piloto, vehiculo, modelo_vehiculo)
@@ -534,6 +578,10 @@ app.patch("/api/inscripciones/:id/pagar", autenticar, autorizar("admin", "inscri
 app.patch("/api/inscripciones/:id/estatus", autenticar, autorizar("admin", "inscripciones"), async (req, res) => {
   try {
     const { estatus, notas } = req.body;
+    const estatusValidos = ["Pendiente", "Pagado", "Descalificado"];
+    if (!estatus || !estatusValidos.includes(estatus)) {
+      return res.status(400).json({ error: "Estatus inválido. Valores permitidos: Pendiente, Pagado, Descalificado" });
+    }
     await db.query(
       "UPDATE inscripciones SET estatus = ?, notas = ? WHERE id = ?",
       [estatus, notas || null, req.params.id]
@@ -554,7 +602,7 @@ app.delete("/api/inscripciones/:id", autenticar, autorizar("admin"), async (req,
 });
 
 // Auto-registro público (sin token)
-app.post("/api/inscripciones/auto-registro", async (req, res) => {
+app.post("/api/inscripciones/auto-registro", autoRegistroLimit, async (req, res) => {
   try {
     const {
       carrera_id, categoria_id, numero_piloto, vehiculo, modelo_vehiculo,
@@ -667,7 +715,7 @@ app.get("/api/reportes/por-categoria", autenticar, async (req, res) => {
   }
 });
 
-app.get("/api/reportes/corte-general", autenticar, autorizar("admin"), async (req, res) => {
+app.get("/api/reportes/corte-general", autenticar, autorizar("admin", "inscripciones"), async (req, res) => {
   try {
     const { carrera_id } = req.query;
     if (!carrera_id) return res.status(400).json({ error: "carrera_id requerido" });
