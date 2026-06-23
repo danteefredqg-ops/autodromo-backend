@@ -259,19 +259,30 @@ app.get("/api/auth/yo", autenticar, async (req, res) => {
 app.get("/api/pilotos", autenticar, async (req, res) => {
   try {
     const { buscar, estatus_licencia } = req.query;
-    let sql    = "SELECT *, (SELECT COUNT(*) FROM inscripciones WHERE piloto_id = pilotos.id) AS total_carreras FROM pilotos WHERE activo = 1";
+    let sql = `
+      SELECT p.*,
+        (SELECT COUNT(*) FROM inscripciones WHERE piloto_id = p.id) AS total_carreras,
+        (SELECT MAX(c.fecha)
+           FROM inscripciones i JOIN carreras c ON c.id = i.carrera_id
+           WHERE i.piloto_id = p.id) AS ultima_carrera_fecha,
+        (SELECT COUNT(*)
+           FROM inscripciones i2
+           WHERE i2.piloto_id = p.id
+             AND i2.carrera_id IN (SELECT id FROM carreras ORDER BY fecha DESC LIMIT 3)
+        ) AS etapas_recientes
+      FROM pilotos p WHERE p.activo = 1`;
     const params = [];
 
     if (estatus_licencia) {
-      sql += " AND estatus_licencia = ?";
+      sql += " AND p.estatus_licencia = ?";
       params.push(estatus_licencia);
     }
     if (buscar) {
-      sql += " AND (nombre_completo LIKE ? OR email LIKE ? OR telefono LIKE ? OR numero_licencia LIKE ?)";
+      sql += " AND (p.nombre_completo LIKE ? OR p.email LIKE ? OR p.telefono LIKE ? OR p.numero_licencia LIKE ?)";
       const like = `%${buscar}%`;
       params.push(like, like, like, like);
     }
-    sql += " ORDER BY nombre_completo ASC";
+    sql += " ORDER BY p.nombre_completo ASC";
     const [rows] = await db.query(sql, params);
     res.json(rows);
   } catch (err) {
