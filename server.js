@@ -268,7 +268,9 @@ app.get("/api/pilotos", autenticar, async (req, res) => {
         (SELECT COUNT(*)
            FROM inscripciones i2
            WHERE i2.piloto_id = p.id
-             AND i2.carrera_id IN (SELECT id FROM carreras ORDER BY fecha DESC LIMIT 3)
+             AND i2.carrera_id IN (
+               SELECT id FROM (SELECT id FROM carreras ORDER BY fecha DESC LIMIT 3) AS ultimas
+             )
         ) AS etapas_recientes
       FROM pilotos p WHERE p.activo = 1`;
     const params = [];
