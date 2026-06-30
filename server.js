@@ -233,6 +233,21 @@ async function inicializarBD() {
   await addColIfMissing("inscripciones", "apodo_vehiculo", "VARCHAR(100) NULL");
   await addColIfMissing("inscripciones", "anio_vehiculo",  "INT NULL");
   await addColIfMissing("inscripciones", "color_vehiculo", "VARCHAR(50) NULL");
+  // Campos extra para formularios oficiales
+  await addColIfMissing("pilotos", "curp",                 "VARCHAR(20) NULL");
+  await addColIfMissing("pilotos", "escolaridad",          "ENUM('Primaria','Secundaria','Media Superior','Superior Cursando','Superior Terminada') NULL");
+  await addColIfMissing("pilotos", "lugar_nacimiento",     "VARCHAR(100) NULL");
+  await addColIfMissing("pilotos", "calle",                "VARCHAR(150) NULL");
+  await addColIfMissing("pilotos", "colonia",              "VARCHAR(100) NULL");
+  await addColIfMissing("pilotos", "cp",                   "VARCHAR(10) NULL");
+  await addColIfMissing("pilotos", "num_ext",              "VARCHAR(20) NULL");
+  await addColIfMissing("pilotos", "num_int",              "VARCHAR(20) NULL");
+  await addColIfMissing("pilotos", "parentesco_emergencia","VARCHAR(50) NULL");
+  await addColIfMissing("pilotos", "alergias",             "VARCHAR(200) NULL");
+  await addColIfMissing("pilotos", "condiciones_medicas",  "VARCHAR(300) NULL");
+  await addColIfMissing("pilotos", "comision_nacional",    "SET('PISTA','KARTISMO','RALLIES','ACELERACIÓN','OFF-ROAD','VINTAGE','CLÁSICOS') NULL");
+  await addColIfMissing("pilotos", "nombre_equipo",        "VARCHAR(100) NULL");
+  await addColIfMissing("pilotos", "anio_licencia_anterior","YEAR NULL");
 
   // Hacer fecha nullable en campeonatos (ahora son temporadas, no eventos individuales)
   try { await db.query("ALTER TABLE campeonatos MODIFY COLUMN fecha DATE NULL"); } catch {}
@@ -586,10 +601,19 @@ app.get("/api/campeonatos", async (req, res) => {
     const [rows] = await db.query(
       `SELECT c.*,
         (SELECT COUNT(*) FROM etapas e WHERE e.campeonato_id = c.id AND e.activo = 1) AS total_etapas,
-        (SELECT COUNT(*) FROM inscripciones i JOIN etapas e ON e.id = i.etapa_id WHERE e.campeonato_id = c.id) AS total_inscritos
+        (SELECT COUNT(*) FROM inscripciones i JOIN etapas e ON e.id = i.etapa_id WHERE e.campeonato_id = c.id) AS total_inscritos,
+        (SELECT e.numero FROM etapas e WHERE e.campeonato_id = c.id AND e.activo = 1 AND e.fecha <= CURDATE() ORDER BY e.fecha DESC, e.numero DESC LIMIT 1) AS etapa_actual_num,
+        (SELECT JSON_ARRAYAGG(JSON_OBJECT('id', cat.id, 'nombre', cat.nombre, 'color', cat.color))
+         FROM campeonato_categorias cc JOIN categorias cat ON cat.id = cc.categoria_id
+         WHERE cc.campeonato_id = c.id) AS categorias_json
        FROM campeonatos c WHERE c.activo = 1 ORDER BY c.creado_en DESC`
     );
-    res.json(rows);
+    const result = rows.map(r => ({
+      ...r,
+      categorias: r.categorias_json ? JSON.parse(r.categorias_json) : [],
+      categorias_json: undefined,
+    }));
+    res.json(result);
   } catch {
     res.status(500).json({ error: "Error al obtener campeonatos" });
   }
@@ -785,7 +809,7 @@ app.post("/api/contratos/firmar", autoRegistroLimit, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 app.get("/api/inscripciones", autenticar, async (req, res) => {
   try {
-    const { campeonato_id, etapa_id, categoria_id, estatus } = req.query;
+    const { campeonato_id, etapa_id, categoria_id, estatus, piloto_id } = req.query;
     let sql = `
       SELECT i.*,
         p.nombre_completo AS piloto_nombre, p.tipo_sangre, p.telefono AS piloto_telefono,
@@ -800,11 +824,12 @@ app.get("/api/inscripciones", autenticar, async (req, res) => {
       JOIN categorias cat   ON cat.id  = i.categoria_id
       WHERE 1=1`;
     const params = [];
+    if (piloto_id)     { sql += " AND i.piloto_id = ?";     params.push(piloto_id); }
     if (etapa_id)      { sql += " AND i.etapa_id = ?";      params.push(etapa_id); }
     else if (campeonato_id) { sql += " AND i.campeonato_id = ?"; params.push(campeonato_id); }
     if (categoria_id)  { sql += " AND i.categoria_id = ?";  params.push(categoria_id); }
     if (estatus)       { sql += " AND i.estatus = ?";        params.push(estatus); }
-    sql += " ORDER BY cat.nombre ASC, i.numero_piloto ASC";
+    sql += " ORDER BY i.creado_en DESC, cat.nombre ASC, i.numero_piloto ASC";
     const [rows] = await db.query(sql, params);
     res.json(rows);
   } catch (err) {
@@ -1062,6 +1087,100 @@ app.post("/api/inscripciones/auto-registro", autoRegistroLimit, async (req, res)
     }
     console.error(err);
     res.status(500).json({ error: "Error en auto-registro" });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FORMULARIOS OFICIALES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Datos completos de un piloto para generar formularios (FEMADAC, Liberación, FJO1)
+app.get("/api/formularios/piloto/:pilotoId", autenticar, async (req, res) => {
+  try {
+    const { pilotoId } = req.params;
+    const { etapa_id } = req.query;
+
+    const [pilotos] = await db.query("SELECT * FROM pilotos WHERE id = ? AND activo = 1 LIMIT 1", [pilotoId]);
+    if (pilotos.length === 0) return res.status(404).json({ error: "Piloto no encontrado" });
+    const p = pilotos[0];
+
+    let inscripcion = null;
+    if (etapa_id) {
+      const [rows] = await db.query(
+        `SELECT i.*,
+                cat.nombre AS categoria_nombre,
+                camp.nombre AS campeonato_nombre,
+                e.nombre AS etapa_nombre, e.numero AS etapa_numero, e.fecha AS etapa_fecha, e.ubicacion AS etapa_ubicacion
+         FROM inscripciones i
+         JOIN categorias cat    ON cat.id  = i.categoria_id
+         JOIN campeonatos camp  ON camp.id = i.campeonato_id
+         LEFT JOIN etapas e     ON e.id    = i.etapa_id
+         WHERE i.piloto_id = ? AND i.etapa_id = ? LIMIT 1`,
+        [pilotoId, etapa_id]
+      );
+      if (rows.length > 0) inscripcion = rows[0];
+    }
+
+    res.json({ piloto: p, inscripcion });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al obtener datos para formulario" });
+  }
+});
+
+// Lista de pilotos con inscripción en una etapa (para selector de formularios)
+app.get("/api/formularios/etapa/:etapaId", autenticar, async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT i.id AS inscripcion_id, i.numero_piloto, i.vehiculo, i.modelo_vehiculo, i.anio_vehiculo,
+              i.estatus, i.metodo_pago, i.monto_pagado,
+              p.id AS piloto_id, p.nombre_completo, p.apellido_paterno, p.apellido_materno, p.nombres,
+              p.tipo_sangre, p.telefono, p.email, p.nacionalidad, p.fecha_nacimiento,
+              p.ciudad, p.estado, p.contacto_emergencia, p.telefono_emergencia,
+              p.curp, p.escolaridad, p.lugar_nacimiento, p.alergias, p.condiciones_medicas,
+              p.comision_nacional, p.nombre_equipo, p.calle, p.colonia, p.cp, p.num_ext, p.num_int,
+              p.parentesco_emergencia, p.anio_licencia_anterior, p.numero_licencia,
+              cat.nombre AS categoria_nombre, cat.color AS categoria_color,
+              camp.nombre AS campeonato_nombre,
+              e.nombre AS etapa_nombre, e.numero AS etapa_numero, e.fecha AS etapa_fecha, e.ubicacion AS etapa_ubicacion
+       FROM inscripciones i
+       JOIN pilotos p         ON p.id    = i.piloto_id
+       JOIN categorias cat    ON cat.id  = i.categoria_id
+       JOIN campeonatos camp  ON camp.id = i.campeonato_id
+       LEFT JOIN etapas e     ON e.id    = i.etapa_id
+       WHERE i.etapa_id = ?
+       ORDER BY p.apellido_paterno ASC, p.nombres ASC`,
+      [req.params.etapaId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al obtener pilotos de la etapa" });
+  }
+});
+
+// Actualizar campos extra del piloto (para formularios)
+app.patch("/api/pilotos/:id/datos-formulario", autenticar, async (req, res) => {
+  try {
+    const { curp, escolaridad, lugar_nacimiento, calle, colonia, cp, num_ext, num_int,
+            parentesco_emergencia, alergias, condiciones_medicas, comision_nacional,
+            nombre_equipo, anio_licencia_anterior } = req.body;
+    await db.query(
+      `UPDATE pilotos SET
+        curp=?, escolaridad=?, lugar_nacimiento=?, calle=?, colonia=?, cp=?, num_ext=?, num_int=?,
+        parentesco_emergencia=?, alergias=?, condiciones_medicas=?, comision_nacional=?,
+        nombre_equipo=?, anio_licencia_anterior=?
+       WHERE id=?`,
+      [curp||null, escolaridad||null, lugar_nacimiento||null, calle||null, colonia||null, cp||null,
+       num_ext||null, num_int||null, parentesco_emergencia||null, alergias||null,
+       condiciones_medicas||null, comision_nacional||null, nombre_equipo||null,
+       anio_licencia_anterior||null, req.params.id]
+    );
+    const [rows] = await db.query("SELECT * FROM pilotos WHERE id = ? LIMIT 1", [req.params.id]);
+    res.json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al actualizar datos del piloto" });
   }
 });
 
