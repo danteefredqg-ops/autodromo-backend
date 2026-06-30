@@ -712,6 +712,21 @@ app.put("/api/campeonatos/:id", autenticar, autorizar("admin"), async (req, res)
   }
 });
 
+app.delete("/api/campeonatos/:id", autenticar, autorizar("admin"), async (req, res) => {
+  try {
+    const [insc] = await db.query(
+      "SELECT COUNT(*) AS cnt FROM inscripciones i JOIN etapas e ON e.id = i.etapa_id WHERE e.campeonato_id = ?",
+      [req.params.id]
+    );
+    if (insc[0].cnt > 0) return res.status(409).json({ error: "No se puede eliminar: tiene inscripciones registradas" });
+    await db.query("UPDATE etapas SET activo = 0 WHERE campeonato_id = ?", [req.params.id]);
+    await db.query("UPDATE campeonatos SET activo = 0 WHERE id = ?", [req.params.id]);
+    res.json({ mensaje: "Campeonato eliminado" });
+  } catch {
+    res.status(500).json({ error: "Error al eliminar campeonato" });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ETAPAS (carreras individuales dentro de un campeonato)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1255,8 +1270,8 @@ app.get("/api/reportes/por-categoria", autenticar, async (req, res) => {
 
 app.get("/api/reportes/corte-general", autenticar, autorizar("admin", "inscripciones"), async (req, res) => {
   try {
-    const { campeonato_id, etapa_id } = req.query;
-    if (!campeonato_id && !etapa_id) return res.status(400).json({ error: "campeonato_id o etapa_id requerido" });
+    const { campeonato_id, etapa_id, todos } = req.query;
+    if (!campeonato_id && !etapa_id && !todos) return res.status(400).json({ error: "campeonato_id, etapa_id o todos=true requerido" });
 
     let etapaInfo = null;
     let campInfo  = null;
@@ -1283,16 +1298,19 @@ app.get("/api/reportes/corte-general", autenticar, autorizar("admin", "inscripci
     let sql = `
       SELECT i.*, p.nombre_completo AS piloto_nombre, p.tipo_sangre, p.telefono AS piloto_telefono,
              cat.nombre AS categoria_nombre, cat.color AS categoria_color,
-             e.nombre AS etapa_nombre, e.numero AS etapa_numero
+             e.nombre AS etapa_nombre, e.numero AS etapa_numero,
+             camp.nombre AS campeonato_nombre_completo
       FROM inscripciones i
-      JOIN pilotos   p   ON p.id   = i.piloto_id
-      JOIN categorias cat ON cat.id = i.categoria_id
-      LEFT JOIN etapas e ON e.id   = i.etapa_id
+      JOIN pilotos    p    ON p.id    = i.piloto_id
+      JOIN categorias cat  ON cat.id  = i.categoria_id
+      LEFT JOIN etapas e   ON e.id    = i.etapa_id
+      LEFT JOIN campeonatos camp ON camp.id = i.campeonato_id
       WHERE 1=1`;
     const params = [];
     if (etapa_id) { sql += " AND i.etapa_id = ?"; params.push(etapa_id); }
     else if (campeonato_id) { sql += " AND i.campeonato_id = ?"; params.push(campeonato_id); }
-    sql += " ORDER BY i.numero_piloto ASC";
+    // si todos=true → sin filtro adicional, devuelve toda la BD
+    sql += " ORDER BY i.campeonato_id ASC, i.etapa_id ASC, i.numero_piloto ASC";
 
     const [inscripciones] = await db.query(sql, params);
     const pagados    = inscripciones.filter((r) => r.estatus === "Pagado");
@@ -1385,6 +1403,57 @@ app.patch("/api/usuarios/:id/password", autenticar, autorizar("admin"), async (r
     res.json({ mensaje: "Contraseña actualizada" });
   } catch {
     res.status(500).json({ error: "Error al cambiar contraseña" });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PERFIL PÚBLICO — pilotos actualizan sus propios datos sin login de admin
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// GET /api/pilotos/perfil-publico?email=X&numero=Y  → devuelve datos del piloto
+app.get("/api/pilotos/perfil-publico", async (req, res) => {
+  try {
+    const { email, numero } = req.query;
+    if (!email || !numero) return res.status(400).json({ error: "Email y número requeridos" });
+    const [rows] = await db.query(
+      "SELECT * FROM pilotos WHERE email = ? AND numero_piloto = ? AND activo = 1 LIMIT 1",
+      [email.trim().toLowerCase(), parseInt(numero)]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: "Piloto no encontrado" });
+    const { password: _, ...piloto } = rows[0];
+    res.json(piloto);
+  } catch {
+    res.status(500).json({ error: "Error al buscar piloto" });
+  }
+});
+
+// PATCH /api/pilotos/perfil-publico  → valida email+numero y actualiza perfil
+app.patch("/api/pilotos/perfil-publico", async (req, res) => {
+  try {
+    const { email, numero, ...campos } = req.body;
+    if (!email || !numero) return res.status(400).json({ error: "Email y número requeridos" });
+    const [rows] = await db.query(
+      "SELECT id FROM pilotos WHERE email = ? AND numero_piloto = ? AND activo = 1 LIMIT 1",
+      [email.trim().toLowerCase(), parseInt(numero)]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: "Piloto no encontrado" });
+    const id = rows[0].id;
+    const permitidos = ['telefono','tipo_sangre','contacto_emergencia','telefono_emergencia',
+      'curp','escolaridad','lugar_nacimiento','calle','colonia','cp','num_ext','num_int',
+      'parentesco_emergencia','alergias','condiciones_medicas','comision_nacional','nombre_equipo',
+      'anio_licencia_anterior','ciudad','estado','nacionalidad'];
+    const sets = []; const vals = [];
+    for (const [k, v] of Object.entries(campos)) {
+      if (permitidos.includes(k) && v !== undefined) { sets.push(`${k} = ?`); vals.push(v || null); }
+    }
+    if (sets.length === 0) return res.status(400).json({ error: "Sin campos para actualizar" });
+    vals.push(id);
+    await db.query(`UPDATE pilotos SET ${sets.join(', ')} WHERE id = ?`, vals);
+    const [updated] = await db.query("SELECT * FROM pilotos WHERE id = ? LIMIT 1", [id]);
+    const { password: _, ...piloto } = updated[0];
+    res.json(piloto);
+  } catch {
+    res.status(500).json({ error: "Error al actualizar perfil" });
   }
 });
 
