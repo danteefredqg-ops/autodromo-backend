@@ -65,9 +65,13 @@ async function indiceExiste(tabla, nombre) {
 }
 
 async function addColIfMissing(tabla, columna, definicion) {
-  if (!(await columnaExiste(tabla, columna))) {
-    await db.query(`ALTER TABLE \`${tabla}\` ADD COLUMN \`${columna}\` ${definicion}`);
-    console.log(`  + ${tabla}.${columna} añadida`);
+  try {
+    if (!(await columnaExiste(tabla, columna))) {
+      await db.query(`ALTER TABLE \`${tabla}\` ADD COLUMN \`${columna}\` ${definicion}`);
+      console.log(`  + ${tabla}.${columna} añadida`);
+    }
+  } catch (err) {
+    console.warn(`  ⚠️  No se pudo añadir ${tabla}.${columna}: ${err.message}`);
   }
 }
 
@@ -235,7 +239,7 @@ async function inicializarBD() {
   await addColIfMissing("inscripciones", "color_vehiculo", "VARCHAR(50) NULL");
   // Campos extra para formularios oficiales
   await addColIfMissing("pilotos", "curp",                 "VARCHAR(20) NULL");
-  await addColIfMissing("pilotos", "escolaridad",          "ENUM('Primaria','Secundaria','Media Superior','Superior Cursando','Superior Terminada') NULL");
+  await addColIfMissing("pilotos", "escolaridad",          "VARCHAR(60) NULL");
   await addColIfMissing("pilotos", "lugar_nacimiento",     "VARCHAR(100) NULL");
   await addColIfMissing("pilotos", "calle",                "VARCHAR(150) NULL");
   await addColIfMissing("pilotos", "colonia",              "VARCHAR(100) NULL");
@@ -245,7 +249,7 @@ async function inicializarBD() {
   await addColIfMissing("pilotos", "parentesco_emergencia","VARCHAR(50) NULL");
   await addColIfMissing("pilotos", "alergias",             "VARCHAR(200) NULL");
   await addColIfMissing("pilotos", "condiciones_medicas",  "VARCHAR(300) NULL");
-  await addColIfMissing("pilotos", "comision_nacional",    "SET('PISTA','KARTISMO','RALLIES','ACELERACIÓN','OFF-ROAD','VINTAGE','CLÁSICOS') NULL");
+  await addColIfMissing("pilotos", "comision_nacional",    "VARCHAR(200) NULL");
   await addColIfMissing("pilotos", "nombre_equipo",        "VARCHAR(100) NULL");
   await addColIfMissing("pilotos", "anio_licencia_anterior","YEAR NULL");
 
@@ -602,19 +606,25 @@ app.get("/api/campeonatos", async (req, res) => {
       `SELECT c.*,
         (SELECT COUNT(*) FROM etapas e WHERE e.campeonato_id = c.id AND e.activo = 1) AS total_etapas,
         (SELECT COUNT(*) FROM inscripciones i JOIN etapas e ON e.id = i.etapa_id WHERE e.campeonato_id = c.id) AS total_inscritos,
-        (SELECT e.numero FROM etapas e WHERE e.campeonato_id = c.id AND e.activo = 1 AND e.fecha <= CURDATE() ORDER BY e.fecha DESC, e.numero DESC LIMIT 1) AS etapa_actual_num,
-        (SELECT JSON_ARRAYAGG(JSON_OBJECT('id', cat.id, 'nombre', cat.nombre, 'color', cat.color))
-         FROM campeonato_categorias cc JOIN categorias cat ON cat.id = cc.categoria_id
-         WHERE cc.campeonato_id = c.id) AS categorias_json
+        (SELECT e.numero FROM etapas e WHERE e.campeonato_id = c.id AND e.activo = 1 AND e.fecha <= CURDATE() ORDER BY e.fecha DESC, e.numero DESC LIMIT 1) AS etapa_actual_num
        FROM campeonatos c WHERE c.activo = 1 ORDER BY c.creado_en DESC`
     );
-    const result = rows.map(r => ({
-      ...r,
-      categorias: r.categorias_json ? JSON.parse(r.categorias_json) : [],
-      categorias_json: undefined,
-    }));
+    // Cargar categorías de cada campeonato en paralelo
+    const [catRows] = await db.query(
+      `SELECT cc.campeonato_id, cat.id, cat.nombre, cat.color
+       FROM campeonato_categorias cc
+       JOIN categorias cat ON cat.id = cc.categoria_id
+       WHERE cat.activo = 1`
+    ).catch(() => [[]]);
+    const catsPorCamp = {};
+    for (const row of catRows) {
+      if (!catsPorCamp[row.campeonato_id]) catsPorCamp[row.campeonato_id] = [];
+      catsPorCamp[row.campeonato_id].push({ id: row.id, nombre: row.nombre, color: row.color });
+    }
+    const result = rows.map(r => ({ ...r, categorias: catsPorCamp[r.id] || [] }));
     res.json(result);
-  } catch {
+  } catch (err) {
+    console.error("GET /api/campeonatos error:", err.message);
     res.status(500).json({ error: "Error al obtener campeonatos" });
   }
 });
