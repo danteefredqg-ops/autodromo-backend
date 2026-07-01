@@ -252,6 +252,7 @@ async function inicializarBD() {
   await addColIfMissing("pilotos", "comision_nacional",    "VARCHAR(200) NULL");
   await addColIfMissing("pilotos", "nombre_equipo",        "VARCHAR(100) NULL");
   await addColIfMissing("pilotos", "anio_licencia_anterior","YEAR NULL");
+  await addColIfMissing("campeonato_categorias", "costo", "DECIMAL(10,2) NULL");
 
   // Hacer fecha nullable en campeonatos (ahora son temporadas, no eventos individuales)
   try { await db.query("ALTER TABLE campeonatos MODIFY COLUMN fecha DATE NULL"); } catch {}
@@ -611,7 +612,7 @@ app.get("/api/campeonatos", async (req, res) => {
     );
     // Cargar categorías de cada campeonato en paralelo
     const [catRows] = await db.query(
-      `SELECT cc.campeonato_id, cat.id, cat.nombre, cat.color
+      `SELECT cc.campeonato_id, cc.costo, cat.id, cat.nombre, cat.color
        FROM campeonato_categorias cc
        JOIN categorias cat ON cat.id = cc.categoria_id
        WHERE cat.activo = 1`
@@ -619,7 +620,7 @@ app.get("/api/campeonatos", async (req, res) => {
     const catsPorCamp = {};
     for (const row of catRows) {
       if (!catsPorCamp[row.campeonato_id]) catsPorCamp[row.campeonato_id] = [];
-      catsPorCamp[row.campeonato_id].push({ id: row.id, nombre: row.nombre, color: row.color });
+      catsPorCamp[row.campeonato_id].push({ id: row.id, nombre: row.nombre, color: row.color, costo: row.costo });
     }
     const result = rows.map(r => ({ ...r, categorias: catsPorCamp[r.id] || [] }));
     res.json(result);
@@ -643,7 +644,7 @@ app.get("/api/campeonatos/:id", async (req, res) => {
 app.get("/api/campeonatos/:id/categorias", async (req, res) => {
   try {
     const [rows] = await db.query(
-      `SELECT cat.* FROM categorias cat
+      `SELECT cat.*, cc.costo FROM categorias cat
        JOIN campeonato_categorias cc ON cc.categoria_id = cat.id
        WHERE cc.campeonato_id = ? AND cat.activo = 1
        ORDER BY cat.nombre ASC`,
@@ -672,16 +673,16 @@ app.get("/api/campeonatos/:id/etapas", async (req, res) => {
 
 app.post("/api/campeonatos", autenticar, autorizar("admin"), async (req, res) => {
   try {
-    const { nombre, descripcion, ubicacion, categoria_ids } = req.body;
+    const { nombre, descripcion, ubicacion, categorias } = req.body;
     if (!nombre) return res.status(400).json({ error: "Nombre requerido" });
     const [result] = await db.query(
       "INSERT INTO campeonatos (nombre,descripcion,ubicacion) VALUES (?,?,?)",
       [nombre, descripcion || null, ubicacion || "Autódromo Monterrey"]
     );
     const campId = result.insertId;
-    if (Array.isArray(categoria_ids) && categoria_ids.length > 0) {
-      const vals = categoria_ids.map((cid) => [campId, cid]);
-      await db.query("INSERT INTO campeonato_categorias (campeonato_id,categoria_id) VALUES ?", [vals]);
+    if (Array.isArray(categorias) && categorias.length > 0) {
+      const vals = categorias.map((c) => [campId, c.id, c.costo ?? null]);
+      await db.query("INSERT INTO campeonato_categorias (campeonato_id,categoria_id,costo) VALUES ?", [vals]);
     }
     const [nuevo] = await db.query("SELECT * FROM campeonatos WHERE id = ? LIMIT 1", [campId]);
     res.status(201).json(nuevo[0]);
@@ -692,17 +693,17 @@ app.post("/api/campeonatos", autenticar, autorizar("admin"), async (req, res) =>
 
 app.put("/api/campeonatos/:id", autenticar, autorizar("admin"), async (req, res) => {
   try {
-    const { nombre, descripcion, ubicacion, categoria_ids } = req.body;
+    const { nombre, descripcion, ubicacion, categorias } = req.body;
     if (!nombre) return res.status(400).json({ error: "Nombre requerido" });
     await db.query(
       "UPDATE campeonatos SET nombre=?,descripcion=?,ubicacion=? WHERE id=?",
       [nombre, descripcion || null, ubicacion || "Autódromo Monterrey", req.params.id]
     );
-    if (Array.isArray(categoria_ids)) {
+    if (Array.isArray(categorias)) {
       await db.query("DELETE FROM campeonato_categorias WHERE campeonato_id = ?", [req.params.id]);
-      if (categoria_ids.length > 0) {
-        const vals = categoria_ids.map((cid) => [req.params.id, cid]);
-        await db.query("INSERT INTO campeonato_categorias (campeonato_id,categoria_id) VALUES ?", [vals]);
+      if (categorias.length > 0) {
+        const vals = categorias.map((c) => [req.params.id, c.id, c.costo ?? null]);
+        await db.query("INSERT INTO campeonato_categorias (campeonato_id,categoria_id,costo) VALUES ?", [vals]);
       }
     }
     const [rows] = await db.query("SELECT * FROM campeonatos WHERE id = ? LIMIT 1", [req.params.id]);
