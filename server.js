@@ -234,9 +234,10 @@ async function inicializarBD() {
   await addColIfMissing("pilotos", "numero_piloto",        "INT NULL UNIQUE AFTER nombres");
   await addColIfMissing("pilotos", "numero_piloto_anterior","INT NULL AFTER numero_piloto");
   await addColIfMissing("inscripciones", "etapa_id",       "INT NULL AFTER campeonato_id");
-  await addColIfMissing("inscripciones", "apodo_vehiculo", "VARCHAR(100) NULL");
-  await addColIfMissing("inscripciones", "anio_vehiculo",  "INT NULL");
-  await addColIfMissing("inscripciones", "color_vehiculo", "VARCHAR(50) NULL");
+  await addColIfMissing("inscripciones", "apodo_vehiculo",   "VARCHAR(100) NULL");
+  await addColIfMissing("inscripciones", "modelo_vehiculo",  "VARCHAR(100) NULL");
+  await addColIfMissing("inscripciones", "anio_vehiculo",    "INT NULL");
+  await addColIfMissing("inscripciones", "color_vehiculo",   "VARCHAR(50) NULL");
   // Campos extra para formularios oficiales
   await addColIfMissing("pilotos", "curp",                 "VARCHAR(20) NULL");
   await addColIfMissing("pilotos", "escolaridad",          "VARCHAR(60) NULL");
