@@ -252,7 +252,25 @@ async function inicializarBD() {
   await addColIfMissing("pilotos", "comision_nacional",    "VARCHAR(200) NULL");
   await addColIfMissing("pilotos", "nombre_equipo",        "VARCHAR(100) NULL");
   await addColIfMissing("pilotos", "anio_licencia_anterior","YEAR NULL");
-  await addColIfMissing("campeonato_categorias", "costo", "DECIMAL(10,2) NULL");
+  await addColIfMissing("campeonato_categorias", "costo",            "DECIMAL(10,2) NULL");
+  await addColIfMissing("pilotos",               "password",          "VARCHAR(255) NULL");
+  await addColIfMissing("pilotos",               "foto_vehiculo",     "VARCHAR(300) NULL");
+
+  // Tabla resultados (posiciones por etapa/categoria)
+  await db.query(`CREATE TABLE IF NOT EXISTS resultados (
+    id           INT AUTO_INCREMENT PRIMARY KEY,
+    etapa_id     INT              NOT NULL,
+    categoria_id INT              NOT NULL,
+    piloto_id    INT              NOT NULL,
+    posicion     TINYINT UNSIGNED NOT NULL,
+    puntos       DECIMAL(6,2)     NOT NULL DEFAULT 0,
+    notas        VARCHAR(200)     NULL,
+    creado_en    DATETIME         NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_res (etapa_id, categoria_id, piloto_id),
+    FOREIGN KEY (etapa_id)     REFERENCES etapas(id),
+    FOREIGN KEY (categoria_id) REFERENCES categorias(id),
+    FOREIGN KEY (piloto_id)    REFERENCES pilotos(id)
+  )`);
 
   // Hacer fecha nullable en campeonatos (ahora son temporadas, no eventos individuales)
   try { await db.query("ALTER TABLE campeonatos MODIFY COLUMN fecha DATE NULL"); } catch {}
@@ -1460,6 +1478,196 @@ app.patch("/api/pilotos/perfil-publico", async (req, res) => {
 
 // ─── 404 ───────────────────────────────────────────────────────────────────────
 app.use((req, res) => res.status(404).json({ error: "Ruta no encontrada" }));
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PORTAL PILOTO — login propio y vista de su historial
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Sistema de puntos F1 para posiciones 1-10
+const PUNTOS_POS = [0, 25, 18, 15, 12, 10, 8, 6, 4, 2, 1];
+function puntosParaPosicion(pos) { return PUNTOS_POS[pos] ?? 0; }
+
+function autenticarPiloto(req, res, next) {
+  const header = req.headers.authorization;
+  if (!header || !header.startsWith("Bearer ")) return res.status(401).json({ error: "Token requerido" });
+  try {
+    const payload = jwt.verify(header.split(" ")[1], JWT_SECRET);
+    if (payload.tipo !== "piloto") return res.status(403).json({ error: "Acceso solo para pilotos" });
+    req.piloto = payload;
+    next();
+  } catch { return res.status(401).json({ error: "Token inválido o expirado" }); }
+}
+
+// POST /api/piloto/crear-acceso  — primera vez: verifica email+numero, crea password
+app.post("/api/piloto/crear-acceso", loginLimit, async (req, res) => {
+  try {
+    const { email, numero, password } = req.body;
+    if (!email || !numero || !password) return res.status(400).json({ error: "Todos los campos son requeridos" });
+    if (password.length < 6) return res.status(400).json({ error: "La contraseña debe tener al menos 6 caracteres" });
+    const [rows] = await db.query(
+      "SELECT id, password FROM pilotos WHERE email = ? AND numero_piloto = ? AND activo = 1 LIMIT 1",
+      [email.trim().toLowerCase(), parseInt(numero)]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: "No encontramos un piloto con ese email y número" });
+    const hash = await bcrypt.hash(password, 10);
+    await db.query("UPDATE pilotos SET password = ? WHERE id = ?", [hash, rows[0].id]);
+    res.json({ mensaje: "Acceso creado correctamente. Ya puedes iniciar sesión." });
+  } catch { res.status(500).json({ error: "Error al crear acceso" }); }
+});
+
+// POST /api/piloto/login
+app.post("/api/piloto/login", loginLimit, async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: "Email y contraseña requeridos" });
+    const [rows] = await db.query(
+      "SELECT * FROM pilotos WHERE email = ? AND activo = 1 LIMIT 1",
+      [email.trim().toLowerCase()]
+    );
+    if (rows.length === 0) return res.status(401).json({ error: "Email o contraseña incorrectos" });
+    const piloto = rows[0];
+    if (!piloto.password) return res.status(401).json({ error: "Aún no tienes acceso creado. Usa la opción 'Crear mi acceso'." });
+    const ok = await bcrypt.compare(password, piloto.password);
+    if (!ok) return res.status(401).json({ error: "Email o contraseña incorrectos" });
+    const token = jwt.sign({ id: piloto.id, numero: piloto.numero_piloto, tipo: "piloto" }, JWT_SECRET, { expiresIn: "7d" });
+    const { password: _, ...datos } = piloto;
+    res.json({ token, piloto: datos });
+  } catch { res.status(500).json({ error: "Error al iniciar sesión" }); }
+});
+
+// GET /api/piloto/mi-perfil
+app.get("/api/piloto/mi-perfil", autenticarPiloto, async (req, res) => {
+  try {
+    const [rows] = await db.query("SELECT * FROM pilotos WHERE id = ? AND activo = 1 LIMIT 1", [req.piloto.id]);
+    if (rows.length === 0) return res.status(404).json({ error: "Piloto no encontrado" });
+    const { password: _, ...datos } = rows[0];
+    res.json(datos);
+  } catch { res.status(500).json({ error: "Error al obtener perfil" }); }
+});
+
+// PATCH /api/piloto/mi-perfil
+app.patch("/api/piloto/mi-perfil", autenticarPiloto, async (req, res) => {
+  try {
+    const permitidos = ['telefono','tipo_sangre','contacto_emergencia','telefono_emergencia',
+      'curp','escolaridad','lugar_nacimiento','calle','colonia','cp','num_ext','num_int',
+      'parentesco_emergencia','alergias','condiciones_medicas','comision_nacional','nombre_equipo',
+      'anio_licencia_anterior','ciudad','estado','nacionalidad','fecha_nacimiento'];
+    const sets = [], vals = [];
+    for (const [k, v] of Object.entries(req.body)) {
+      if (permitidos.includes(k) && v !== undefined) { sets.push(`\`${k}\` = ?`); vals.push(v || null); }
+    }
+    // Cambio de contraseña opcional
+    if (req.body.nueva_password && req.body.nueva_password.length >= 6) {
+      sets.push("password = ?");
+      vals.push(await bcrypt.hash(req.body.nueva_password, 10));
+    }
+    if (sets.length === 0) return res.status(400).json({ error: "Sin campos para actualizar" });
+    vals.push(req.piloto.id);
+    await db.query(`UPDATE pilotos SET ${sets.join(", ")} WHERE id = ?`, vals);
+    const [updated] = await db.query("SELECT * FROM pilotos WHERE id = ? LIMIT 1", [req.piloto.id]);
+    const { password: _, ...datos } = updated[0];
+    res.json(datos);
+  } catch { res.status(500).json({ error: "Error al actualizar perfil" }); }
+});
+
+// GET /api/piloto/mis-carreras  — historial de inscripciones
+app.get("/api/piloto/mis-carreras", autenticarPiloto, async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT i.*,
+              cat.nombre   AS categoria_nombre, cat.color AS categoria_color,
+              e.numero     AS etapa_numero, e.fecha AS etapa_fecha, e.nombre AS etapa_nombre, e.ubicacion AS etapa_ubicacion,
+              c.nombre     AS campeonato_nombre,
+              r.posicion   AS resultado_posicion, r.puntos AS resultado_puntos
+       FROM inscripciones i
+       JOIN categorias cat ON cat.id = i.categoria_id
+       JOIN etapas e       ON e.id   = i.etapa_id
+       JOIN campeonatos c  ON c.id   = i.campeonato_id
+       LEFT JOIN resultados r ON r.etapa_id = i.etapa_id AND r.categoria_id = i.categoria_id AND r.piloto_id = i.piloto_id
+       WHERE i.piloto_id = ?
+       ORDER BY e.fecha DESC, c.nombre ASC`,
+      [req.piloto.id]
+    );
+    res.json(rows);
+  } catch { res.status(500).json({ error: "Error al obtener carreras" }); }
+});
+
+// GET /api/piloto/mis-stats  — estadísticas globales del piloto
+app.get("/api/piloto/mis-stats", autenticarPiloto, async (req, res) => {
+  try {
+    const [carreras]    = await db.query("SELECT COUNT(*) AS total FROM inscripciones WHERE piloto_id = ?", [req.piloto.id]);
+    const [pagadas]     = await db.query("SELECT COUNT(*) AS total FROM inscripciones WHERE piloto_id = ? AND estatus = 'Pagado'", [req.piloto.id]);
+    const [resultados]  = await db.query("SELECT posicion, puntos FROM resultados WHERE piloto_id = ?", [req.piloto.id]);
+    const totalPuntos   = resultados.reduce((s, r) => s + parseFloat(r.puntos || 0), 0);
+    const victorias     = resultados.filter(r => r.posicion === 1).length;
+    const podios        = resultados.filter(r => r.posicion <= 3).length;
+    const mejorPos      = resultados.length ? Math.min(...resultados.map(r => r.posicion)) : null;
+    const [campeonatos] = await db.query(
+      "SELECT COUNT(DISTINCT campeonato_id) AS total FROM inscripciones WHERE piloto_id = ?", [req.piloto.id]
+    );
+    res.json({
+      carreras:     carreras[0].total,
+      pagadas:      pagadas[0].total,
+      campeonatos:  campeonatos[0].total,
+      totalPuntos,
+      victorias,
+      podios,
+      mejorPosicion: mejorPos,
+    });
+  } catch { res.status(500).json({ error: "Error al obtener estadísticas" }); }
+});
+
+// GET /api/piloto/clasificacion/:campeonato_id/:categoria_id  — tabla de posiciones general
+app.get("/api/piloto/clasificacion/:campeonato_id/:categoria_id", autenticarPiloto, async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT p.id, p.nombre_completo, p.numero_piloto,
+              SUM(r.puntos) AS puntos_totales,
+              COUNT(r.id) AS carreras_corridas,
+              SUM(CASE WHEN r.posicion = 1 THEN 1 ELSE 0 END) AS victorias,
+              MIN(r.posicion) AS mejor_posicion
+       FROM resultados r
+       JOIN etapas e ON e.id = r.etapa_id
+       JOIN pilotos p ON p.id = r.piloto_id
+       WHERE e.campeonato_id = ? AND r.categoria_id = ?
+       GROUP BY p.id
+       ORDER BY puntos_totales DESC, victorias DESC`,
+      [req.params.campeonato_id, req.params.categoria_id]
+    );
+    res.json(rows);
+  } catch { res.status(500).json({ error: "Error al obtener clasificación" }); }
+});
+
+// POST /api/resultados  — admin captura posiciones de una etapa
+app.post("/api/resultados", autenticar, autorizar("admin", "inscripciones"), async (req, res) => {
+  try {
+    const { etapa_id, categoria_id, resultados } = req.body;
+    if (!etapa_id || !categoria_id || !Array.isArray(resultados)) return res.status(400).json({ error: "Datos incompletos" });
+    // Borra y re-inserta (upsert simple)
+    await db.query("DELETE FROM resultados WHERE etapa_id = ? AND categoria_id = ?", [etapa_id, categoria_id]);
+    if (resultados.length > 0) {
+      const vals = resultados.map(r => [etapa_id, categoria_id, r.piloto_id, r.posicion, puntosParaPosicion(r.posicion)]);
+      await db.query("INSERT INTO resultados (etapa_id,categoria_id,piloto_id,posicion,puntos) VALUES ?", [vals]);
+    }
+    res.json({ mensaje: `${resultados.length} resultado(s) guardados` });
+  } catch { res.status(500).json({ error: "Error al guardar resultados" }); }
+});
+
+// GET /api/resultados?etapa_id=X&categoria_id=Y  — para el modal de admin
+app.get("/api/resultados", autenticar, async (req, res) => {
+  try {
+    const { etapa_id, categoria_id } = req.query;
+    if (!etapa_id || !categoria_id) return res.status(400).json({ error: "etapa_id y categoria_id requeridos" });
+    const [rows] = await db.query(
+      `SELECT r.*, p.nombre_completo, p.numero_piloto
+       FROM resultados r JOIN pilotos p ON p.id = r.piloto_id
+       WHERE r.etapa_id = ? AND r.categoria_id = ?
+       ORDER BY r.posicion ASC`,
+      [etapa_id, categoria_id]
+    );
+    res.json(rows);
+  } catch { res.status(500).json({ error: "Error al obtener resultados" }); }
+});
 
 // ─── Arrancar ──────────────────────────────────────────────────────────────────
 inicializarBD()
