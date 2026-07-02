@@ -253,8 +253,27 @@ async function inicializarBD() {
   await addColIfMissing("pilotos", "nombre_equipo",        "VARCHAR(100) NULL");
   await addColIfMissing("pilotos", "anio_licencia_anterior","YEAR NULL");
   await addColIfMissing("campeonato_categorias", "costo",            "DECIMAL(10,2) NULL");
+  await addColIfMissing("categorias",            "costo_default",    "DECIMAL(10,2) NULL");
   await addColIfMissing("pilotos",               "password",          "VARCHAR(255) NULL");
   await addColIfMissing("pilotos",               "foto_vehiculo",     "VARCHAR(300) NULL");
+
+  // Pre-cargar costo_default para categorías conocidas (solo si aún no tienen valor)
+  const COSTOS_CONOCIDOS = [
+    ['BRACKET', 2300], ['BRACKET AVANZADO', 2500], ['BRACKET RAPIDO', 2500],
+    ['BRACKET SPORT', 2500], ['11 SEGUNDOS', 3000], ['DRAGSTER', 4000],
+    ['PRO COMPETITION', 4000], ['PRO BIKE', 2500], ['SUPER QUICK', 3500],
+    ['JUNIOR DRAGSTER', 1800], ['PONY 1', 3000], ['PONY 2', 3000],
+    ['PONY LIBRE', 3500], ['CMC', 3500], ['CMC LIBRE', 3500],
+    ['AMERICAN IRON', 3500], ['KA SERIES (1 PILOTO)', 3500],
+    ['KA SERIES (2 PILOTOS)', 4000], ['KA SERIES (2 PILOTO)', 4000],
+    ['PRO/AM', 1000], ['INVASION', 1500], ['INVASIÓN', 1500],
+  ];
+  for (const [nombre, costo] of COSTOS_CONOCIDOS) {
+    await db.query(
+      "UPDATE categorias SET costo_default = ? WHERE UPPER(nombre) = UPPER(?) AND costo_default IS NULL",
+      [costo, nombre]
+    ).catch(() => {});
+  }
 
   // Tabla resultados (posiciones por etapa/categoria)
   await db.query(`CREATE TABLE IF NOT EXISTS resultados (
