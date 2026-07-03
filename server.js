@@ -677,6 +677,21 @@ app.delete("/api/pilotos/:id", autenticar, autorizar("admin"), async (req, res) 
   }
 });
 
+// Admin: resetear contraseña del portal de un piloto
+app.patch("/api/pilotos/:id/reset-password", autenticar, autorizar("admin"), async (req, res) => {
+  try {
+    const { password } = req.body;
+    if (!password || password.length < 6) return res.status(400).json({ error: "Mínimo 6 caracteres" });
+    const [rows] = await db.query("SELECT id, nombre_completo, email FROM pilotos WHERE id = ? AND activo = 1 LIMIT 1", [req.params.id]);
+    if (rows.length === 0) return res.status(404).json({ error: "Piloto no encontrado" });
+    const hash = await bcrypt.hash(password, 10);
+    await db.query("UPDATE pilotos SET password = ? WHERE id = ?", [hash, req.params.id]);
+    res.json({ mensaje: `Contraseña del portal restablecida para ${rows[0].nombre_completo}` });
+  } catch {
+    res.status(500).json({ error: "Error al restablecer contraseña" });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // CATEGORÍAS
 // ═══════════════════════════════════════════════════════════════════════════════
