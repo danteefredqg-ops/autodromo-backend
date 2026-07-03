@@ -1197,7 +1197,7 @@ app.get("/api/formularios/etapa/:etapaId", autenticar, async (req, res) => {
   try {
     const [rows] = await db.query(
       `SELECT i.id AS inscripcion_id, i.numero_piloto, i.vehiculo, i.modelo_vehiculo, i.anio_vehiculo,
-              i.estatus, i.metodo_pago, i.monto_pagado,
+              i.estatus, i.metodo_pago, i.monto_pago,
               p.id AS piloto_id, p.nombre_completo, p.apellido_paterno, p.apellido_materno, p.nombres,
               p.tipo_sangre, p.telefono, p.email, p.nacionalidad, p.fecha_nacimiento,
               p.ciudad, p.estado, p.contacto_emergencia, p.telefono_emergencia,
@@ -1496,9 +1496,6 @@ app.patch("/api/pilotos/perfil-publico", async (req, res) => {
   }
 });
 
-// ─── 404 ───────────────────────────────────────────────────────────────────────
-app.use((req, res) => res.status(404).json({ error: "Ruta no encontrada" }));
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // PORTAL PILOTO — login propio y vista de su historial
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1600,9 +1597,9 @@ app.get("/api/piloto/mis-carreras", autenticarPiloto, async (req, res) => {
               c.nombre     AS campeonato_nombre,
               r.posicion   AS resultado_posicion, r.puntos AS resultado_puntos
        FROM inscripciones i
-       JOIN categorias cat ON cat.id = i.categoria_id
-       JOIN etapas e       ON e.id   = i.etapa_id
-       JOIN campeonatos c  ON c.id   = i.campeonato_id
+       JOIN categorias cat  ON cat.id = i.categoria_id
+       LEFT JOIN etapas e   ON e.id   = i.etapa_id
+       JOIN campeonatos c   ON c.id   = i.campeonato_id
        LEFT JOIN resultados r ON r.etapa_id = i.etapa_id AND r.categoria_id = i.categoria_id AND r.piloto_id = i.piloto_id
        WHERE i.piloto_id = ?
        ORDER BY e.fecha DESC, c.nombre ASC`,
@@ -1688,6 +1685,9 @@ app.get("/api/resultados", autenticar, async (req, res) => {
     res.json(rows);
   } catch { res.status(500).json({ error: "Error al obtener resultados" }); }
 });
+
+// ─── 404 ───────────────────────────────────────────────────────────────────────
+app.use((req, res) => res.status(404).json({ error: "Ruta no encontrada" }));
 
 // ─── Arrancar ──────────────────────────────────────────────────────────────────
 inicializarBD()
