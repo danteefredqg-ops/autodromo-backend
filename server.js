@@ -292,6 +292,9 @@ async function inicializarBD() {
   // Quitar Tarjeta del ENUM
   try { await db.query("ALTER TABLE inscripciones MODIFY COLUMN metodo_pago ENUM('Efectivo','Transferencia')"); } catch {}
 
+  // tipo_sangre debería ser nullable (pilotos pueden no saberlo al registrarse)
+  try { await db.query("ALTER TABLE pilotos MODIFY COLUMN tipo_sangre VARCHAR(5) NULL"); } catch {}
+
   // 6. Crear Etapa 1 para campeonatos existentes que no tienen etapas
   if (await tablaExiste("etapas")) {
     const [camps] = await db.query("SELECT * FROM campeonatos WHERE activo = 1");
@@ -486,6 +489,55 @@ app.get("/api/pilotos", autenticar, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Error al obtener pilotos" });
+  }
+});
+
+// GET /api/pilotos/perfil-publico?email=X&numero=Y  → devuelve datos del piloto (sin auth)
+// IMPORTANTE: debe estar ANTES de /:id para que Express no lo intercepte
+app.get("/api/pilotos/perfil-publico", async (req, res) => {
+  try {
+    const { email, numero } = req.query;
+    if (!email || !numero) return res.status(400).json({ error: "Email y número requeridos" });
+    const [rows] = await db.query(
+      "SELECT * FROM pilotos WHERE email = ? AND numero_piloto = ? AND activo = 1 LIMIT 1",
+      [email.trim().toLowerCase(), parseInt(numero)]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: "Piloto no encontrado" });
+    const { password: _, ...piloto } = rows[0];
+    res.json(piloto);
+  } catch {
+    res.status(500).json({ error: "Error al buscar piloto" });
+  }
+});
+
+// PATCH /api/pilotos/perfil-publico  → valida email+numero y actualiza perfil (sin auth)
+// IMPORTANTE: debe estar ANTES de /:id
+app.patch("/api/pilotos/perfil-publico", async (req, res) => {
+  try {
+    const { email, numero, ...campos } = req.body;
+    if (!email || !numero) return res.status(400).json({ error: "Email y número requeridos" });
+    const [rows] = await db.query(
+      "SELECT id FROM pilotos WHERE email = ? AND numero_piloto = ? AND activo = 1 LIMIT 1",
+      [email.trim().toLowerCase(), parseInt(numero)]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: "Piloto no encontrado" });
+    const id = rows[0].id;
+    const permitidos = ['telefono','tipo_sangre','contacto_emergencia','telefono_emergencia',
+      'curp','escolaridad','lugar_nacimiento','calle','colonia','cp','num_ext','num_int',
+      'parentesco_emergencia','alergias','condiciones_medicas','comision_nacional','nombre_equipo',
+      'anio_licencia_anterior','ciudad','estado','nacionalidad'];
+    const sets = []; const vals = [];
+    for (const [k, v] of Object.entries(campos)) {
+      if (permitidos.includes(k) && v !== undefined) { sets.push(`${k} = ?`); vals.push(v || null); }
+    }
+    if (sets.length === 0) return res.status(400).json({ error: "Sin campos para actualizar" });
+    vals.push(id);
+    await db.query(`UPDATE pilotos SET ${sets.join(', ')} WHERE id = ?`, vals);
+    const [updated] = await db.query("SELECT * FROM pilotos WHERE id = ? LIMIT 1", [id]);
+    const { password: _, ...piloto } = updated[0];
+    res.json(piloto);
+  } catch {
+    res.status(500).json({ error: "Error al actualizar perfil" });
   }
 });
 
@@ -1473,57 +1525,6 @@ app.patch("/api/usuarios/:id/password", autenticar, autorizar("admin"), async (r
     res.json({ mensaje: "Contraseña actualizada" });
   } catch {
     res.status(500).json({ error: "Error al cambiar contraseña" });
-  }
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// PERFIL PÚBLICO — pilotos actualizan sus propios datos sin login de admin
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// GET /api/pilotos/perfil-publico?email=X&numero=Y  → devuelve datos del piloto
-app.get("/api/pilotos/perfil-publico", async (req, res) => {
-  try {
-    const { email, numero } = req.query;
-    if (!email || !numero) return res.status(400).json({ error: "Email y número requeridos" });
-    const [rows] = await db.query(
-      "SELECT * FROM pilotos WHERE email = ? AND numero_piloto = ? AND activo = 1 LIMIT 1",
-      [email.trim().toLowerCase(), parseInt(numero)]
-    );
-    if (rows.length === 0) return res.status(404).json({ error: "Piloto no encontrado" });
-    const { password: _, ...piloto } = rows[0];
-    res.json(piloto);
-  } catch {
-    res.status(500).json({ error: "Error al buscar piloto" });
-  }
-});
-
-// PATCH /api/pilotos/perfil-publico  → valida email+numero y actualiza perfil
-app.patch("/api/pilotos/perfil-publico", async (req, res) => {
-  try {
-    const { email, numero, ...campos } = req.body;
-    if (!email || !numero) return res.status(400).json({ error: "Email y número requeridos" });
-    const [rows] = await db.query(
-      "SELECT id FROM pilotos WHERE email = ? AND numero_piloto = ? AND activo = 1 LIMIT 1",
-      [email.trim().toLowerCase(), parseInt(numero)]
-    );
-    if (rows.length === 0) return res.status(404).json({ error: "Piloto no encontrado" });
-    const id = rows[0].id;
-    const permitidos = ['telefono','tipo_sangre','contacto_emergencia','telefono_emergencia',
-      'curp','escolaridad','lugar_nacimiento','calle','colonia','cp','num_ext','num_int',
-      'parentesco_emergencia','alergias','condiciones_medicas','comision_nacional','nombre_equipo',
-      'anio_licencia_anterior','ciudad','estado','nacionalidad'];
-    const sets = []; const vals = [];
-    for (const [k, v] of Object.entries(campos)) {
-      if (permitidos.includes(k) && v !== undefined) { sets.push(`${k} = ?`); vals.push(v || null); }
-    }
-    if (sets.length === 0) return res.status(400).json({ error: "Sin campos para actualizar" });
-    vals.push(id);
-    await db.query(`UPDATE pilotos SET ${sets.join(', ')} WHERE id = ?`, vals);
-    const [updated] = await db.query("SELECT * FROM pilotos WHERE id = ? LIMIT 1", [id]);
-    const { password: _, ...piloto } = updated[0];
-    res.json(piloto);
-  } catch {
-    res.status(500).json({ error: "Error al actualizar perfil" });
   }
 });
 
