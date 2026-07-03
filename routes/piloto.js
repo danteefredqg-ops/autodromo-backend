@@ -15,6 +15,7 @@ router.post("/crear-acceso", loginLimit, async (req, res) => {
       [email.trim().toLowerCase(), parseInt(numero)]
     );
     if (rows.length === 0) return res.status(404).json({ error: "No encontramos un piloto con ese email y número" });
+    if (rows[0].password) return res.status(409).json({ error: "Ya tienes acceso al portal. Usa tu contraseña para entrar; si la olvidaste, contacta a Autódromo Monterrey." });
     const hash = await bcrypt.hash(password, 10);
     await db.query("UPDATE pilotos SET password = ? WHERE id = ?", [hash, rows[0].id]);
     res.json({ mensaje: "Acceso creado correctamente. Ya puedes iniciar sesión." });
