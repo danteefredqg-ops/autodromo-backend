@@ -75,6 +75,18 @@ async function addColIfMissing(tabla, columna, definicion) {
   }
 }
 
+// Costos default por nombre de categoría (case-insensitive match)
+const COSTOS_CONOCIDOS = [
+  ['BRACKET', 2300], ['BRACKET AVANZADO', 2500], ['BRACKET RAPIDO', 2500],
+  ['BRACKET SPORT', 2500], ['11 SEGUNDOS', 3000], ['DRAGSTER', 4000],
+  ['PRO COMPETITION', 4000], ['PRO BIKE', 2500], ['SUPER QUICK', 3500],
+  ['JUNIOR DRAGSTER', 1800], ['PONY 1', 3000], ['PONY 2', 3000],
+  ['PONY LIBRE', 3500], ['CMC', 3500], ['CMC LIBRE', 3500],
+  ['AMERICAN IRON', 3500], ['KA SERIES (1 PILOTO)', 3500],
+  ['KA SERIES (2 PILOTOS)', 4000], ['KA SERIES (2 PILOTO)', 4000],
+  ['PRO/AM', 1000], ['INVASION', 1500], ['INVASIÓN', 1500],
+];
+
 // ─── BD init ──────────────────────────────────────────────────────────────────
 async function inicializarBD() {
   // 1. Rename carreras → campeonatos
@@ -258,24 +270,6 @@ async function inicializarBD() {
   await addColIfMissing("pilotos",               "password",          "VARCHAR(255) NULL");
   await addColIfMissing("pilotos",               "foto_vehiculo",     "VARCHAR(300) NULL");
 
-  // Pre-cargar costo_default para categorías conocidas (solo si aún no tienen valor)
-  const COSTOS_CONOCIDOS = [
-    ['BRACKET', 2300], ['BRACKET AVANZADO', 2500], ['BRACKET RAPIDO', 2500],
-    ['BRACKET SPORT', 2500], ['11 SEGUNDOS', 3000], ['DRAGSTER', 4000],
-    ['PRO COMPETITION', 4000], ['PRO BIKE', 2500], ['SUPER QUICK', 3500],
-    ['JUNIOR DRAGSTER', 1800], ['PONY 1', 3000], ['PONY 2', 3000],
-    ['PONY LIBRE', 3500], ['CMC', 3500], ['CMC LIBRE', 3500],
-    ['AMERICAN IRON', 3500], ['KA SERIES (1 PILOTO)', 3500],
-    ['KA SERIES (2 PILOTOS)', 4000], ['KA SERIES (2 PILOTO)', 4000],
-    ['PRO/AM', 1000], ['INVASION', 1500], ['INVASIÓN', 1500],
-  ];
-  for (const [nombre, costo] of COSTOS_CONOCIDOS) {
-    await db.query(
-      "UPDATE categorias SET costo_default = ? WHERE UPPER(nombre) = UPPER(?) AND costo_default IS NULL",
-      [costo, nombre]
-    ).catch(() => {});
-  }
-
   // Tabla resultados (posiciones por etapa/categoria)
   await db.query(`CREATE TABLE IF NOT EXISTS resultados (
     id           INT AUTO_INCREMENT PRIMARY KEY,
@@ -352,16 +346,53 @@ async function inicializarBD() {
     console.log("✅ Usuarios creados");
   }
 
-  // 9. Seed categorías
+  // 9. Seed categorías  [nombre, descripcion, color, costo_default]
   const cats = [
-    ["BN","Beginner Nacional","#22c55e"], ["SR","Super Rookie","#3b82f6"],
-    ["Rotax Junior","Categoría Junior Rotax","#f59e0b"], ["Rotax Senior","Categoría Senior Rotax","#ef4444"],
-    ["X30 Junior","X30 Junior","#8b5cf6"], ["X30 Senior","X30 Senior","#ec4899"],
-    ["Shifter","Kart Shifter","#06b6d4"], ["DD2","Dual Drive 2","#f97316"],
-    ["Máster","Categoría Máster 35+","#64748b"],
+    // ─── Karting
+    ["BN",                    "Beginner Nacional",      "#22c55e", null],
+    ["SR",                    "Super Rookie",           "#3b82f6", null],
+    ["Rotax Junior",          "Categoría Junior Rotax", "#f59e0b", null],
+    ["Rotax Senior",          "Categoría Senior Rotax", "#ef4444", null],
+    ["X30 Junior",            "X30 Junior",             "#8b5cf6", null],
+    ["X30 Senior",            "X30 Senior",             "#ec4899", null],
+    ["Shifter",               "Kart Shifter",           "#06b6d4", null],
+    ["DD2",                   "Dual Drive 2",           "#f97316", null],
+    ["Máster",                "Categoría Máster 35+",   "#64748b", null],
+    // ─── MEX 1/4 de milla
+    ["BRACKET",               "Bracket",                "#f59e0b", 2300],
+    ["BRACKET AVANZADO",      "Bracket Avanzado",       "#f97316", 2500],
+    ["BRACKET RAPIDO",        "Bracket Rápido",         "#ef4444", 2500],
+    ["BRACKET SPORT",         "Bracket Sport",          "#e63946", 2500],
+    ["11 SEGUNDOS",           "11 Segundos",            "#22c55e", 3000],
+    ["DRAGSTER",              "Dragster",               "#8b5cf6", 4000],
+    ["PRO COMPETITION",       "Pro Competition",        "#ec4899", 4000],
+    ["PRO BIKE",              "Pro Bike",               "#06b6d4", 2500],
+    ["SUPER QUICK",           "Super Quick",            "#3b82f6", 3500],
+    ["JUNIOR DRAGSTER",       "Junior Dragster",        "#64748b", 1800],
+    // ─── Monterrey Racing Cup
+    ["PONY 1",                "Pony 1",                 "#22c55e", 3000],
+    ["PONY 2",                "Pony 2",                 "#3b82f6", 3000],
+    ["PONY LIBRE",            "Pony Libre",             "#f59e0b", 3500],
+    ["CMC",                   "CMC",                    "#ef4444", 3500],
+    ["CMC LIBRE",             "CMC Libre",              "#e63946", 3500],
+    ["AMERICAN IRON",         "American Iron",          "#8b5cf6", 3500],
+    ["KA SERIES (1 PILOTO)",  "Ka Series 1 Piloto",    "#ec4899", 3500],
+    ["KA SERIES (2 PILOTOS)", "Ka Series 2 Pilotos",   "#06b6d4", 4000],
+    ["PRO/AM",                "Pro/Am",                 "#fbbf24", 1000],
+    ["INVASIÓN",              "Invasión",               "#64748b", 1500],
   ];
-  for (const [nombre, descripcion, color] of cats) {
-    await db.query("INSERT IGNORE INTO categorias (nombre,descripcion,color) VALUES (?,?,?)", [nombre, descripcion, color]);
+  for (const [nombre, descripcion, color, costo_default] of cats) {
+    await db.query(
+      "INSERT IGNORE INTO categorias (nombre,descripcion,color,costo_default) VALUES (?,?,?,?)",
+      [nombre, descripcion, color, costo_default]
+    );
+  }
+  // Actualizar costo_default en categorías que ya existían sin precio
+  for (const [nombre, costo] of COSTOS_CONOCIDOS) {
+    await db.query(
+      "UPDATE categorias SET costo_default = ? WHERE UPPER(nombre) = UPPER(?) AND costo_default IS NULL",
+      [costo, nombre]
+    ).catch(() => {});
   }
   console.log("✅ Categorías verificadas");
 }
