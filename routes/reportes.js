@@ -137,4 +137,30 @@ router.get("/corte-general", autenticar, autorizar("admin", "inscripciones"), as
   }
 });
 
+// GET /api/reportes/clasificacion
+router.get("/clasificacion", autenticar, async (req, res) => {
+  try {
+    const { campeonato_id, categoria_id } = req.query;
+    if (!campeonato_id || !categoria_id) return res.status(400).json({ error: "campeonato_id y categoria_id requeridos" });
+    const [rows] = await db.query(
+      `SELECT p.id, p.nombre_completo, p.numero_piloto,
+              COALESCE(SUM(r.puntos), 0) AS puntos_totales,
+              COUNT(r.id) AS carreras_corridas,
+              COALESCE(SUM(CASE WHEN r.posicion = 1 THEN 1 ELSE 0 END), 0) AS victorias,
+              MIN(r.posicion) AS mejor_posicion
+       FROM resultados r
+       JOIN etapas e ON e.id = r.etapa_id
+       JOIN pilotos p ON p.id = r.piloto_id
+       WHERE e.campeonato_id = ? AND r.categoria_id = ?
+       GROUP BY p.id
+       ORDER BY puntos_totales DESC, victorias DESC`,
+      [campeonato_id, categoria_id]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al obtener clasificación" });
+  }
+});
+
 module.exports = router;

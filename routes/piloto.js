@@ -8,13 +8,22 @@ const { JWT_SECRET, loginLimit, autenticarPiloto } = require("../middleware/auth
 router.post("/crear-acceso", loginLimit, async (req, res) => {
   try {
     const { email, numero, password } = req.body;
-    if (!email || !numero || !password) return res.status(400).json({ error: "Todos los campos son requeridos" });
+    if (!email || !password) return res.status(400).json({ error: "Email y contraseña son requeridos" });
     if (password.length < 6) return res.status(400).json({ error: "La contraseña debe tener al menos 6 caracteres" });
-    const [rows] = await db.query(
-      "SELECT id, password FROM pilotos WHERE email = ? AND numero_piloto = ? AND activo = 1 LIMIT 1",
-      [email.trim().toLowerCase(), parseInt(numero)]
-    );
-    if (rows.length === 0) return res.status(404).json({ error: "No encontramos un piloto con ese email y número" });
+    let rows;
+    if (numero && parseInt(numero) > 0) {
+      [rows] = await db.query(
+        "SELECT id, password FROM pilotos WHERE email = ? AND numero_piloto = ? AND activo = 1 LIMIT 1",
+        [email.trim().toLowerCase(), parseInt(numero)]
+      );
+      if (rows.length === 0) return res.status(404).json({ error: "No encontramos un piloto con ese email y número. Verifica que el número sea correcto." });
+    } else {
+      [rows] = await db.query(
+        "SELECT id, password FROM pilotos WHERE email = ? AND (numero_piloto IS NULL OR numero_piloto = 0) AND activo = 1 LIMIT 1",
+        [email.trim().toLowerCase()]
+      );
+      if (rows.length === 0) return res.status(404).json({ error: "No encontramos tu cuenta solo con el correo. Si ya tienes número de piloto asignado, inclúyelo para verificar tu identidad." });
+    }
     if (rows[0].password) return res.status(409).json({ error: "Ya tienes acceso al portal. Usa tu contraseña para entrar; si la olvidaste, contacta a Autódromo Monterrey." });
     const hash = await bcrypt.hash(password, 10);
     await db.query("UPDATE pilotos SET password = ? WHERE id = ?", [hash, rows[0].id]);
