@@ -22,53 +22,6 @@ router.get("/buscar-por-email", autoRegistroLimit, async (req, res) => {
   }
 });
 
-// GET /api/pilotos/perfil-publico  — ANTES de /:id para evitar conflicto de rutas
-router.get("/perfil-publico", async (req, res) => {
-  try {
-    const { email, numero } = req.query;
-    if (!email || !numero) return res.status(400).json({ error: "Email y número requeridos" });
-    const [rows] = await db.query(
-      "SELECT * FROM pilotos WHERE email = ? AND numero_piloto = ? AND activo = 1 LIMIT 1",
-      [email.trim().toLowerCase(), parseInt(numero)]
-    );
-    if (rows.length === 0) return res.status(404).json({ error: "Piloto no encontrado" });
-    const { password: _, ...piloto } = rows[0];
-    res.json(piloto);
-  } catch {
-    res.status(500).json({ error: "Error al buscar piloto" });
-  }
-});
-
-// PATCH /api/pilotos/perfil-publico  — ANTES de /:id
-router.patch("/perfil-publico", async (req, res) => {
-  try {
-    const { email, numero, ...campos } = req.body;
-    if (!email || !numero) return res.status(400).json({ error: "Email y número requeridos" });
-    const [rows] = await db.query(
-      "SELECT id FROM pilotos WHERE email = ? AND numero_piloto = ? AND activo = 1 LIMIT 1",
-      [email.trim().toLowerCase(), parseInt(numero)]
-    );
-    if (rows.length === 0) return res.status(404).json({ error: "Piloto no encontrado" });
-    const id = rows[0].id;
-    const permitidos = ['telefono','tipo_sangre','contacto_emergencia','telefono_emergencia',
-      'curp','escolaridad','lugar_nacimiento','calle','colonia','cp','num_ext','num_int',
-      'parentesco_emergencia','alergias','condiciones_medicas','comision_nacional','nombre_equipo',
-      'anio_licencia_anterior','ciudad','estado','nacionalidad'];
-    const sets = [], vals = [];
-    for (const [k, v] of Object.entries(campos)) {
-      if (permitidos.includes(k) && v !== undefined) { sets.push(`${k} = ?`); vals.push(v || null); }
-    }
-    if (sets.length === 0) return res.status(400).json({ error: "Sin campos para actualizar" });
-    vals.push(id);
-    await db.query(`UPDATE pilotos SET ${sets.join(', ')} WHERE id = ?`, vals);
-    const [updated] = await db.query("SELECT * FROM pilotos WHERE id = ? LIMIT 1", [id]);
-    const { password: _, ...piloto } = updated[0];
-    res.json(piloto);
-  } catch {
-    res.status(500).json({ error: "Error al actualizar perfil" });
-  }
-});
-
 // GET /api/pilotos
 router.get("/", autenticar, async (req, res) => {
   try {
@@ -238,7 +191,7 @@ router.patch("/:id/reset-password", autenticar, autorizar("admin"), async (req, 
 });
 
 // PATCH /api/pilotos/:id/datos-formulario
-router.patch("/:id/datos-formulario", autenticar, async (req, res) => {
+router.patch("/:id/datos-formulario", autenticar, autorizar("admin", "inscripciones"), async (req, res) => {
   try {
     const { curp, escolaridad, lugar_nacimiento, calle, colonia, cp, num_ext, num_int,
             parentesco_emergencia, alergias, condiciones_medicas, comision_nacional,
