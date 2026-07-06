@@ -114,9 +114,10 @@ router.get("/mis-stats", autenticarPiloto, async (req, res) => {
     const [pagadas]    = await db.query("SELECT COUNT(*) AS total FROM inscripciones WHERE piloto_id = ? AND estatus = 'Pagado'", [req.piloto.id]);
     const [resultados] = await db.query("SELECT posicion, puntos FROM resultados WHERE piloto_id = ?", [req.piloto.id]);
     const totalPuntos  = resultados.reduce((s, r) => s + parseFloat(r.puntos || 0), 0);
+    const posicionesValidas = resultados.map(r => r.posicion).filter(p => p !== null);
     const victorias    = resultados.filter(r => r.posicion === 1).length;
-    const podios       = resultados.filter(r => r.posicion <= 3).length;
-    const mejorPos     = resultados.length ? Math.min(...resultados.map(r => r.posicion)) : null;
+    const podios       = posicionesValidas.filter(p => p <= 3).length;
+    const mejorPos     = posicionesValidas.length ? Math.min(...posicionesValidas) : null;
     const [campeonatos] = await db.query(
       "SELECT COUNT(DISTINCT campeonato_id) AS total FROM inscripciones WHERE piloto_id = ?", [req.piloto.id]
     );

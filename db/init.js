@@ -231,7 +231,9 @@ async function inicializarBD() {
     etapa_id     INT              NOT NULL,
     categoria_id INT              NOT NULL,
     piloto_id    INT              NOT NULL,
-    posicion     TINYINT UNSIGNED NOT NULL,
+    posicion     TINYINT UNSIGNED NULL,
+    estatus      ENUM('Finalizado','DNF','DSQ') NOT NULL DEFAULT 'Finalizado',
+    tiempo_vuelta VARCHAR(20)     NULL,
     puntos       DECIMAL(6,2)     NOT NULL DEFAULT 0,
     notas        VARCHAR(200)     NULL,
     creado_en    DATETIME         NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -240,6 +242,9 @@ async function inicializarBD() {
     FOREIGN KEY (categoria_id) REFERENCES categorias(id),
     FOREIGN KEY (piloto_id)    REFERENCES pilotos(id)
   )`);
+  await addColIfMissing("resultados", "estatus",       "ENUM('Finalizado','DNF','DSQ') NOT NULL DEFAULT 'Finalizado' AFTER posicion");
+  await addColIfMissing("resultados", "tiempo_vuelta", "VARCHAR(20) NULL AFTER estatus");
+  try { await db.query("ALTER TABLE resultados MODIFY COLUMN posicion TINYINT UNSIGNED NULL"); } catch {}
 
   try { await db.query("ALTER TABLE campeonatos MODIFY COLUMN fecha DATE NULL"); } catch {}
   try { await db.query("ALTER TABLE inscripciones MODIFY COLUMN metodo_pago ENUM('Efectivo','Transferencia')"); } catch {}
