@@ -18,6 +18,7 @@ router.post("/", autenticar, autorizar("admin"), async (req, res) => {
   try {
     const { username, password, nombre, rol } = req.body;
     if (!username || !password || !nombre || !rol) return res.status(400).json({ error: "Todos los campos son requeridos" });
+    if (!["admin", "inscripciones", "torre"].includes(rol)) return res.status(400).json({ error: "Rol inválido" });
     const hash = await bcrypt.hash(password, 10);
     const [result] = await db.query(
       "INSERT INTO usuarios (username,password,nombre,rol) VALUES (?,?,?,?)",

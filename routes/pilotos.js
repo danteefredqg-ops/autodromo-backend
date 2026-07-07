@@ -143,7 +143,7 @@ router.put("/:id", autenticar, autorizar("admin", "inscripciones"), async (req, 
 });
 
 // PATCH /api/pilotos/:id/numero-uno
-router.patch("/:id/numero-uno", autenticar, async (req, res) => {
+router.patch("/:id/numero-uno", autenticar, autorizar("admin", "inscripciones"), async (req, res) => {
   try {
     const [rows] = await db.query("SELECT id, numero_piloto, numero_piloto_anterior FROM pilotos WHERE id = ? AND activo = 1 LIMIT 1", [req.params.id]);
     if (rows.length === 0) return res.status(404).json({ error: "Piloto no encontrado" });

@@ -17,8 +17,13 @@ router.post("/", autenticar, autorizar("admin", "inscripciones"), async (req, re
     }
 
     const posicionesUsadas = new Set();
+    const pilotosUsados = new Set();
     for (const r of resultados) {
       if (!r.piloto_id) return res.status(400).json({ error: "piloto_id requerido en cada resultado" });
+      if (pilotosUsados.has(r.piloto_id)) {
+        return res.status(400).json({ error: `piloto_id ${r.piloto_id} está duplicado en el envío` });
+      }
+      pilotosUsados.add(r.piloto_id);
       const estatus = r.estatus || "Finalizado";
       if (!["Finalizado", "DNF", "DSQ"].includes(estatus)) {
         return res.status(400).json({ error: `estatus inválido para piloto_id ${r.piloto_id}` });
