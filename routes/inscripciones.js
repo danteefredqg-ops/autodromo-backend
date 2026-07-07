@@ -12,12 +12,14 @@ router.get("/", autenticar, async (req, res) => {
         p.nacionalidad AS piloto_nacionalidad,
         camp.nombre AS campeonato_nombre,
         e.nombre AS etapa_nombre, e.numero AS etapa_numero, e.fecha AS etapa_fecha,
-        cat.nombre AS categoria_nombre, cat.color AS categoria_color
+        cat.nombre AS categoria_nombre, cat.color AS categoria_color,
+        COALESCE(cc.costo, cat.costo_default, e.costo, 0) AS costo_categoria
       FROM inscripciones i
       JOIN pilotos   p      ON p.id    = i.piloto_id
       JOIN campeonatos camp  ON camp.id = i.campeonato_id
       LEFT JOIN etapas e    ON e.id    = i.etapa_id
       JOIN categorias cat   ON cat.id  = i.categoria_id
+      LEFT JOIN campeonato_categorias cc ON cc.campeonato_id = i.campeonato_id AND cc.categoria_id = i.categoria_id
       WHERE 1=1`;
     const params = [];
     if (piloto_id)        { sql += " AND i.piloto_id = ?";     params.push(piloto_id); }
