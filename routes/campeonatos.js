@@ -62,12 +62,22 @@ router.get("/:id/categorias", async (req, res) => {
 // GET /api/campeonatos/:id/etapas
 router.get("/:id/etapas", async (req, res) => {
   try {
-    const [rows] = await db.query(
-      `SELECT e.*,
+    let sql = `
+      SELECT e.*,
         (SELECT COUNT(*) FROM inscripciones WHERE etapa_id = e.id) AS total_inscritos
-       FROM etapas e WHERE e.campeonato_id = ? AND e.activo = 1 ORDER BY e.numero ASC`,
-      [req.params.id]
-    );
+       FROM etapas e WHERE e.campeonato_id = ? AND e.activo = 1`;
+    const params = [req.params.id];
+    if (req.query.disponibles) {
+      // No usar CURDATE(): el servidor de MySQL puede correr en UTC y desfasar
+      // la fecha varias horas respecto a Monterrey (México ya no usa horario
+      // de verano, es UTC-6 fijo).
+      const hoyMx = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      sql += ` AND (e.fecha_apertura_inscripcion IS NULL OR ? >= e.fecha_apertura_inscripcion)
+                AND (e.fecha_cierre_inscripcion   IS NULL OR ? <= e.fecha_cierre_inscripcion)`;
+      params.push(hoyMx, hoyMx);
+    }
+    sql += " ORDER BY e.numero ASC";
+    const [rows] = await db.query(sql, params);
     res.json(rows);
   } catch {
     res.status(500).json({ error: "Error al obtener etapas" });
@@ -138,8 +148,12 @@ router.delete("/:id", autenticar, autorizar("admin"), async (req, res) => {
 router.post("/:id/etapas", autenticar, autorizar("admin"), async (req, res) => {
   try {
     const campId = req.params.id;
-    const { numero, nombre, fecha, ubicacion, descripcion, costo } = req.body;
+    const { numero, nombre, fecha, ubicacion, descripcion, costo,
+            fecha_apertura_inscripcion, fecha_cierre_inscripcion } = req.body;
     if (!fecha) return res.status(400).json({ error: "Fecha requerida" });
+    if (fecha_apertura_inscripcion && fecha_cierre_inscripcion && fecha_apertura_inscripcion > fecha_cierre_inscripcion) {
+      return res.status(400).json({ error: "La apertura de inscripciones no puede ser después del cierre" });
+    }
     let etapaNum = numero;
     if (!etapaNum) {
       const [maxRow] = await db.query(
@@ -150,8 +164,10 @@ router.post("/:id/etapas", autenticar, autorizar("admin"), async (req, res) => {
     const [camp] = await db.query("SELECT ubicacion FROM campeonatos WHERE id = ? LIMIT 1", [campId]);
     const defaultUbic = camp.length > 0 ? camp[0].ubicacion : "Autódromo Monterrey";
     const [result] = await db.query(
-      "INSERT INTO etapas (campeonato_id,numero,nombre,fecha,ubicacion,descripcion,costo) VALUES (?,?,?,?,?,?,?)",
-      [campId, etapaNum, nombre || `Etapa ${etapaNum}`, fecha, ubicacion || defaultUbic, descripcion || null, costo || null]
+      `INSERT INTO etapas (campeonato_id,numero,nombre,fecha,ubicacion,descripcion,costo,
+        fecha_apertura_inscripcion,fecha_cierre_inscripcion) VALUES (?,?,?,?,?,?,?,?,?)`,
+      [campId, etapaNum, nombre || `Etapa ${etapaNum}`, fecha, ubicacion || defaultUbic, descripcion || null, costo || null,
+       fecha_apertura_inscripcion || null, fecha_cierre_inscripcion || null]
     );
     const [nueva] = await db.query(
       `SELECT e.*, (SELECT COUNT(*) FROM inscripciones WHERE etapa_id = e.id) AS total_inscritos

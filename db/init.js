@@ -139,11 +139,15 @@ async function inicializarBD() {
     ubicacion     VARCHAR(150) NOT NULL DEFAULT 'Autódromo Monterrey',
     descripcion   TEXT,
     costo         DECIMAL(10,2),
+    fecha_apertura_inscripcion DATE NULL,
+    fecha_cierre_inscripcion   DATE NULL,
     activo        TINYINT(1)   NOT NULL DEFAULT 1,
     creado_en     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uk_camp_etapa (campeonato_id, numero),
     FOREIGN KEY (campeonato_id) REFERENCES campeonatos(id) ON DELETE CASCADE
   )`);
+  await addColIfMissing("etapas", "fecha_apertura_inscripcion", "DATE NULL");
+  await addColIfMissing("etapas", "fecha_cierre_inscripcion",   "DATE NULL");
 
   // 4. Migrate inscripciones: carrera_id → campeonato_id (legacy)
   const tieneInsc = await tablaExiste("inscripciones");
@@ -179,7 +183,7 @@ async function inicializarBD() {
       color_vehiculo  VARCHAR(50),
       apodo_vehiculo  VARCHAR(100),
       estatus         ENUM('Pendiente','Pagado','Descalificado') NOT NULL DEFAULT 'Pendiente',
-      metodo_pago     ENUM('Efectivo','Transferencia'),
+      metodo_pago     ENUM('Efectivo','Transferencia','Intercambio'),
       monto_pago      DECIMAL(10,2),
       pagado_en       DATETIME,
       pagado_por      VARCHAR(80),
@@ -220,10 +224,36 @@ async function inicializarBD() {
   await addColIfMissing("pilotos", "comision_nacional",     "VARCHAR(200) NULL");
   await addColIfMissing("pilotos", "nombre_equipo",         "VARCHAR(100) NULL");
   await addColIfMissing("pilotos", "anio_licencia_anterior","YEAR NULL");
+  await addColIfMissing("pilotos", "anio_inicio_autodromo", "YEAR NULL");
+  await addColIfMissing("pilotos", "foto_perfil",           "VARCHAR(300) NULL");
   await addColIfMissing("campeonato_categorias", "costo",   "DECIMAL(10,2) NULL");
   await addColIfMissing("categorias", "costo_default",      "DECIMAL(10,2) NULL");
   await addColIfMissing("pilotos", "password",              "VARCHAR(255) NULL");
   await addColIfMissing("pilotos", "foto_vehiculo",         "VARCHAR(300) NULL");
+
+  // Tabla preparadores (mecánicos/crew que registra cada piloto para su seguro)
+  await db.query(`CREATE TABLE IF NOT EXISTS preparadores (
+    id                     INT AUTO_INCREMENT PRIMARY KEY,
+    piloto_id              INT          NOT NULL,
+    apellido_paterno       VARCHAR(60)  NOT NULL,
+    apellido_materno       VARCHAR(60),
+    nombres                VARCHAR(100) NOT NULL,
+    nombre_completo        VARCHAR(200) NOT NULL,
+    telefono               VARCHAR(20),
+    email                  VARCHAR(120),
+    tipo_sangre            VARCHAR(5),
+    curp                   VARCHAR(20),
+    fecha_nacimiento       DATE,
+    nacionalidad           VARCHAR(50)  DEFAULT 'Mexicana',
+    ciudad                 VARCHAR(100),
+    estado                 VARCHAR(100),
+    contacto_emergencia    VARCHAR(150),
+    telefono_emergencia    VARCHAR(20),
+    foto_perfil            VARCHAR(300),
+    activo                 TINYINT(1)   NOT NULL DEFAULT 1,
+    creado_en              DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (piloto_id) REFERENCES pilotos(id)
+  )`);
 
   // Tabla resultados
   await db.query(`CREATE TABLE IF NOT EXISTS resultados (
@@ -247,7 +277,7 @@ async function inicializarBD() {
   try { await db.query("ALTER TABLE resultados MODIFY COLUMN posicion TINYINT UNSIGNED NULL"); } catch {}
 
   try { await db.query("ALTER TABLE campeonatos MODIFY COLUMN fecha DATE NULL"); } catch {}
-  try { await db.query("ALTER TABLE inscripciones MODIFY COLUMN metodo_pago ENUM('Efectivo','Transferencia')"); } catch {}
+  try { await db.query("ALTER TABLE inscripciones MODIFY COLUMN metodo_pago ENUM('Efectivo','Transferencia','Intercambio')"); } catch {}
   try { await db.query("ALTER TABLE pilotos MODIFY COLUMN tipo_sangre VARCHAR(5) NULL"); } catch {}
 
   // 6. Etapa 1 para campeonatos sin etapas

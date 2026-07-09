@@ -105,7 +105,9 @@ router.get("/corte-general", autenticar, autorizar("admin", "inscripciones"), as
     const pendientes   = inscripciones.filter(r => r.estatus !== "Pagado" && r.estatus !== "Descalificado");
     const efectivo     = pagados.filter(r => r.metodo_pago === "Efectivo");
     const transferencia = pagados.filter(r => r.metodo_pago === "Transferencia");
+    const intercambio  = pagados.filter(r => r.metodo_pago === "Intercambio");
     const ingresos     = pagados.reduce((s, r) => s + (parseFloat(r.monto_pago) || costoPorInscripcion), 0);
+    const ingresosEfectivo = efectivo.reduce((s, r) => s + (parseFloat(r.monto_pago) || costoPorInscripcion), 0);
     const esperado     = inscripciones.length * costoPorInscripcion;
 
     const por_categoria = {};
@@ -124,7 +126,8 @@ router.get("/corte-general", autenticar, autorizar("admin", "inscripciones"), as
       costo:       costoPorInscripcion,
       resumen: {
         total: inscripciones.length, pagados: pagados.length, pendientes: pendientes.length,
-        efectivo: efectivo.length, transferencia: transferencia.length, ingresos, esperado,
+        efectivo: efectivo.length, transferencia: transferencia.length, intercambio: intercambio.length,
+        ingresos, ingresosEfectivo, esperado,
       },
       por_categoria,
       inscripciones,

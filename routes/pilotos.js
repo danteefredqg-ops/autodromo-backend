@@ -1,7 +1,25 @@
 const router = require("express").Router();
 const bcrypt = require("bcryptjs");
+const path   = require("path");
+const multer = require("multer");
 const db     = require("../configuracion/db");
 const { autenticar, autorizar, autoRegistroLimit } = require("../middleware/auth");
+const { PILOTOS_DIR } = require("../configuracion/uploads");
+
+const uploadFoto = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, PILOTOS_DIR),
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase() || ".jpg";
+      cb(null, `${req.params.id}${ext}`);
+    },
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!/^image\/(jpeg|png|webp)$/.test(file.mimetype)) return cb(new Error("Solo se permiten imágenes JPG, PNG o WEBP"));
+    cb(null, true);
+  },
+});
 
 // GET /api/pilotos/buscar-por-email  — público, sin auth
 router.get("/buscar-por-email", autoRegistroLimit, async (req, res) => {
@@ -28,7 +46,9 @@ router.get("/", autenticar, async (req, res) => {
     const { buscar, estatus_licencia } = req.query;
     let sql = `
       SELECT p.*,
-        (SELECT COUNT(*) FROM inscripciones WHERE piloto_id = p.id) AS total_campeonatos
+        (SELECT COUNT(*) FROM inscripciones WHERE piloto_id = p.id) AS total_campeonatos,
+        (SELECT cat.nombre FROM inscripciones i2 JOIN categorias cat ON cat.id = i2.categoria_id
+         WHERE i2.piloto_id = p.id ORDER BY i2.creado_en DESC LIMIT 1) AS ultima_categoria
       FROM pilotos p WHERE p.activo = 1`;
     const params = [];
     if (estatus_licencia) { sql += " AND p.estatus_licencia = ?"; params.push(estatus_licencia); }
@@ -48,8 +68,8 @@ router.get("/", autenticar, async (req, res) => {
   }
 });
 
-// GET /api/pilotos/:id
-router.get("/:id", autenticar, async (req, res) => {
+// GET /api/pilotos/:id — admin/inscripciones (incluye datos sensibles y preparadores)
+router.get("/:id", autenticar, autorizar("admin", "inscripciones"), async (req, res) => {
   try {
     const [pilotos] = await db.query("SELECT * FROM pilotos WHERE id = ? LIMIT 1", [req.params.id]);
     if (pilotos.length === 0) return res.status(404).json({ error: "Piloto no encontrado" });
@@ -65,7 +85,11 @@ router.get("/:id", autenticar, async (req, res) => {
        ORDER BY i.creado_en DESC`,
       [req.params.id]
     );
-    res.json({ ...pilotos[0], inscripciones });
+    const [preparadores] = await db.query(
+      "SELECT * FROM preparadores WHERE piloto_id = ? AND activo = 1 ORDER BY nombre_completo ASC",
+      [req.params.id]
+    );
+    res.json({ ...pilotos[0], inscripciones, preparadores });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Error al obtener piloto" });
@@ -190,22 +214,45 @@ router.patch("/:id/reset-password", autenticar, autorizar("admin"), async (req, 
   }
 });
 
+// PATCH /api/pilotos/:id/foto  — admin/inscripciones, para cuando el piloto no puede subirla él mismo
+router.patch("/:id/foto", autenticar, autorizar("admin", "inscripciones"), (req, res) => {
+  uploadFoto.single("foto")(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: err.message || "Error al subir la foto" });
+    if (!req.file) return res.status(400).json({ error: "No se recibió ninguna imagen" });
+    try {
+      const url = `/uploads/pilotos/${req.file.filename}?v=${Date.now()}`;
+      await db.query("UPDATE pilotos SET foto_perfil = ? WHERE id = ?", [url, req.params.id]);
+      res.json({ foto_perfil: url });
+    } catch {
+      res.status(500).json({ error: "Error al guardar la foto" });
+    }
+  });
+});
+
 // PATCH /api/pilotos/:id/datos-formulario
 router.patch("/:id/datos-formulario", autenticar, autorizar("admin", "inscripciones"), async (req, res) => {
   try {
     const { curp, escolaridad, lugar_nacimiento, calle, colonia, cp, num_ext, num_int,
             parentesco_emergencia, alergias, condiciones_medicas, comision_nacional,
-            nombre_equipo, anio_licencia_anterior } = req.body;
+            nombre_equipo, anio_licencia_anterior, anio_inicio_autodromo } = req.body;
+    const anioActual = new Date().getFullYear();
+    for (const [campo, valor] of Object.entries({ anio_licencia_anterior, anio_inicio_autodromo })) {
+      if (!valor) continue;
+      const anio = Number(valor);
+      if (!Number.isInteger(anio) || anio < 1990 || anio > anioActual) {
+        return res.status(400).json({ error: `Año inválido en ${campo} (debe estar entre 1990 y ${anioActual})` });
+      }
+    }
     await db.query(
       `UPDATE pilotos SET
         curp=?, escolaridad=?, lugar_nacimiento=?, calle=?, colonia=?, cp=?, num_ext=?, num_int=?,
         parentesco_emergencia=?, alergias=?, condiciones_medicas=?, comision_nacional=?,
-        nombre_equipo=?, anio_licencia_anterior=?
+        nombre_equipo=?, anio_licencia_anterior=?, anio_inicio_autodromo=?
        WHERE id=?`,
       [curp||null, escolaridad||null, lugar_nacimiento||null, calle||null, colonia||null, cp||null,
        num_ext||null, num_int||null, parentesco_emergencia||null, alergias||null,
        condiciones_medicas||null, comision_nacional||null, nombre_equipo||null,
-       anio_licencia_anterior||null, req.params.id]
+       anio_licencia_anterior||null, anio_inicio_autodromo||null, req.params.id]
     );
     const [rows] = await db.query("SELECT * FROM pilotos WHERE id = ? LIMIT 1", [req.params.id]);
     res.json(rows[0]);

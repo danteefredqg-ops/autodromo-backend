@@ -2,6 +2,7 @@
 const express = require("express");
 const cors    = require("cors");
 const db      = require("./configuracion/db");
+const { UPLOADS_DIR } = require("./configuracion/uploads");
 
 const { inicializarBD } = require("./db/init");
 
@@ -12,9 +13,11 @@ const ENV_REQUERIDOS = ["MYSQLHOST", "MYSQLUSER", "MYSQLPASSWORD", "MYSQLDATABAS
 const faltantes = ENV_REQUERIDOS.filter(v => !process.env[v]);
 if (faltantes.length)      console.warn(`⚠️  Variables faltantes: ${faltantes.join(", ")}`);
 if (!process.env.JWT_SECRET) console.warn("⚠️  JWT_SECRET no configurado — usando clave de desarrollo.");
+if (!process.env.UPLOADS_DIR) console.warn("⚠️  UPLOADS_DIR no configurado — las fotos se guardan localmente y se perderán en el próximo deploy. Conecta un Volume en Railway.");
 
 app.use(cors({ origin: process.env.FRONTEND_URL || "*", credentials: true }));
 app.use(express.json());
+app.use("/uploads", express.static(UPLOADS_DIR));
 
 // ─── Health ───────────────────────────────────────────────────────────────────
 app.get("/api/health", async (req, res) => {

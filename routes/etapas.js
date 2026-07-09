@@ -5,11 +5,17 @@ const { autenticar, autorizar } = require("../middleware/auth");
 // PUT /api/etapas/:id
 router.put("/:id", autenticar, autorizar("admin"), async (req, res) => {
   try {
-    const { numero, nombre, fecha, ubicacion, descripcion, costo } = req.body;
+    const { numero, nombre, fecha, ubicacion, descripcion, costo,
+            fecha_apertura_inscripcion, fecha_cierre_inscripcion } = req.body;
     if (!fecha) return res.status(400).json({ error: "Fecha requerida" });
+    if (fecha_apertura_inscripcion && fecha_cierre_inscripcion && fecha_apertura_inscripcion > fecha_cierre_inscripcion) {
+      return res.status(400).json({ error: "La apertura de inscripciones no puede ser después del cierre" });
+    }
     await db.query(
-      "UPDATE etapas SET numero=?,nombre=?,fecha=?,ubicacion=?,descripcion=?,costo=? WHERE id=?",
-      [numero, nombre, fecha, ubicacion || "Autódromo Monterrey", descripcion || null, costo || null, req.params.id]
+      `UPDATE etapas SET numero=?,nombre=?,fecha=?,ubicacion=?,descripcion=?,costo=?,
+        fecha_apertura_inscripcion=?,fecha_cierre_inscripcion=? WHERE id=?`,
+      [numero, nombre, fecha, ubicacion || "Autódromo Monterrey", descripcion || null, costo || null,
+       fecha_apertura_inscripcion || null, fecha_cierre_inscripcion || null, req.params.id]
     );
     const [rows] = await db.query(
       `SELECT e.*, (SELECT COUNT(*) FROM inscripciones WHERE etapa_id = e.id) AS total_inscritos

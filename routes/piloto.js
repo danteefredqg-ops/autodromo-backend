@@ -1,8 +1,41 @@
 const router = require("express").Router();
 const bcrypt = require("bcryptjs");
 const jwt    = require("jsonwebtoken");
+const path   = require("path");
+const multer = require("multer");
 const db     = require("../configuracion/db");
 const { JWT_SECRET, loginLimit, autenticarPiloto } = require("../middleware/auth");
+const { PILOTOS_DIR, PREPARADORES_DIR } = require("../configuracion/uploads");
+
+const uploadFoto = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, PILOTOS_DIR),
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase() || ".jpg";
+      cb(null, `${req.piloto.id}${ext}`);
+    },
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!/^image\/(jpeg|png|webp)$/.test(file.mimetype)) return cb(new Error("Solo se permiten imágenes JPG, PNG o WEBP"));
+    cb(null, true);
+  },
+});
+
+const uploadFotoPreparador = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, PREPARADORES_DIR),
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase() || ".jpg";
+      cb(null, `${req.params.id}${ext}`);
+    },
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!/^image\/(jpeg|png|webp)$/.test(file.mimetype)) return cb(new Error("Solo se permiten imágenes JPG, PNG o WEBP"));
+    cb(null, true);
+  },
+});
 
 // POST /api/piloto/crear-acceso
 router.post("/crear-acceso", loginLimit, async (req, res) => {
@@ -67,7 +100,16 @@ router.patch("/mi-perfil", autenticarPiloto, async (req, res) => {
     const permitidos = ['telefono','tipo_sangre','contacto_emergencia','telefono_emergencia',
       'curp','escolaridad','lugar_nacimiento','calle','colonia','cp','num_ext','num_int',
       'parentesco_emergencia','alergias','condiciones_medicas','comision_nacional','nombre_equipo',
-      'anio_licencia_anterior','ciudad','estado','nacionalidad','fecha_nacimiento'];
+      'anio_licencia_anterior','anio_inicio_autodromo','ciudad','estado','nacionalidad','fecha_nacimiento'];
+    const anioActual = new Date().getFullYear();
+    for (const campoAnio of ['anio_licencia_anterior', 'anio_inicio_autodromo']) {
+      if (req.body[campoAnio]) {
+        const anio = Number(req.body[campoAnio]);
+        if (!Number.isInteger(anio) || anio < 1990 || anio > anioActual) {
+          return res.status(400).json({ error: `Año inválido en ${campoAnio} (debe estar entre 1990 y ${anioActual})` });
+        }
+      }
+    }
     const sets = [], vals = [];
     for (const [k, v] of Object.entries(req.body)) {
       if (permitidos.includes(k) && v !== undefined) { sets.push(`\`${k}\` = ?`); vals.push(v || null); }
@@ -82,7 +124,103 @@ router.patch("/mi-perfil", autenticarPiloto, async (req, res) => {
     const [updated] = await db.query("SELECT * FROM pilotos WHERE id = ? LIMIT 1", [req.piloto.id]);
     const { password: _, ...datos } = updated[0];
     res.json(datos);
-  } catch { res.status(500).json({ error: "Error al actualizar perfil" }); }
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al actualizar perfil" });
+  }
+});
+
+// POST /api/piloto/mi-foto
+router.post("/mi-foto", autenticarPiloto, (req, res) => {
+  uploadFoto.single("foto")(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: err.message || "Error al subir la foto" });
+    if (!req.file) return res.status(400).json({ error: "No se recibió ninguna imagen" });
+    try {
+      const url = `/uploads/pilotos/${req.file.filename}?v=${Date.now()}`;
+      await db.query("UPDATE pilotos SET foto_perfil = ? WHERE id = ?", [url, req.piloto.id]);
+      res.json({ foto_perfil: url });
+    } catch {
+      res.status(500).json({ error: "Error al guardar la foto" });
+    }
+  });
+});
+
+// ── Preparadores (mecánicos/crew) ────────────────────────────────────────────
+const CAMPOS_PREPARADOR = ['apellido_paterno','apellido_materno','nombres','telefono','email',
+  'tipo_sangre','curp','fecha_nacimiento','nacionalidad','ciudad','estado',
+  'contacto_emergencia','telefono_emergencia'];
+
+// GET /api/piloto/mis-preparadores
+router.get("/mis-preparadores", autenticarPiloto, async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      "SELECT * FROM preparadores WHERE piloto_id = ? AND activo = 1 ORDER BY nombre_completo ASC",
+      [req.piloto.id]
+    );
+    res.json(rows);
+  } catch { res.status(500).json({ error: "Error al obtener preparadores" }); }
+});
+
+// POST /api/piloto/mis-preparadores
+router.post("/mis-preparadores", autenticarPiloto, async (req, res) => {
+  try {
+    const { apellido_paterno, apellido_materno, nombres } = req.body;
+    if (!apellido_paterno || !nombres) return res.status(400).json({ error: "Apellido paterno y nombres son requeridos" });
+    const nombre_completo = [nombres, apellido_paterno, apellido_materno].filter(Boolean).join(" ");
+    const vals = CAMPOS_PREPARADOR.map(c => req.body[c] || (c === 'nacionalidad' ? 'Mexicana' : null));
+    const [result] = await db.query(
+      `INSERT INTO preparadores (piloto_id, ${CAMPOS_PREPARADOR.join(",")}, nombre_completo)
+       VALUES (?, ${CAMPOS_PREPARADOR.map(() => '?').join(",")}, ?)`,
+      [req.piloto.id, ...vals, nombre_completo]
+    );
+    const [nuevo] = await db.query("SELECT * FROM preparadores WHERE id = ? LIMIT 1", [result.insertId]);
+    res.status(201).json(nuevo[0]);
+  } catch (err) { console.error(err); res.status(500).json({ error: "Error al registrar preparador" }); }
+});
+
+// PUT /api/piloto/mis-preparadores/:id
+router.put("/mis-preparadores/:id", autenticarPiloto, async (req, res) => {
+  try {
+    const [check] = await db.query("SELECT id FROM preparadores WHERE id = ? AND piloto_id = ?", [req.params.id, req.piloto.id]);
+    if (check.length === 0) return res.status(404).json({ error: "Preparador no encontrado" });
+    const { apellido_paterno, apellido_materno, nombres } = req.body;
+    if (!apellido_paterno || !nombres) return res.status(400).json({ error: "Apellido paterno y nombres son requeridos" });
+    const nombre_completo = [nombres, apellido_paterno, apellido_materno].filter(Boolean).join(" ");
+    const vals = CAMPOS_PREPARADOR.map(c => req.body[c] || (c === 'nacionalidad' ? 'Mexicana' : null));
+    await db.query(
+      `UPDATE preparadores SET ${CAMPOS_PREPARADOR.map(c => `${c}=?`).join(",")}, nombre_completo=? WHERE id=?`,
+      [...vals, nombre_completo, req.params.id]
+    );
+    const [rows] = await db.query("SELECT * FROM preparadores WHERE id = ? LIMIT 1", [req.params.id]);
+    res.json(rows[0]);
+  } catch { res.status(500).json({ error: "Error al actualizar preparador" }); }
+});
+
+// DELETE /api/piloto/mis-preparadores/:id
+router.delete("/mis-preparadores/:id", autenticarPiloto, async (req, res) => {
+  try {
+    const [check] = await db.query("SELECT id FROM preparadores WHERE id = ? AND piloto_id = ?", [req.params.id, req.piloto.id]);
+    if (check.length === 0) return res.status(404).json({ error: "Preparador no encontrado" });
+    await db.query("UPDATE preparadores SET activo = 0 WHERE id = ?", [req.params.id]);
+    res.json({ mensaje: "Preparador eliminado" });
+  } catch { res.status(500).json({ error: "Error al eliminar preparador" }); }
+});
+
+// POST /api/piloto/mis-preparadores/:id/foto
+router.post("/mis-preparadores/:id/foto", autenticarPiloto, async (req, res) => {
+  const [check] = await db.query("SELECT id FROM preparadores WHERE id = ? AND piloto_id = ?", [req.params.id, req.piloto.id]);
+  if (check.length === 0) return res.status(404).json({ error: "Preparador no encontrado" });
+  uploadFotoPreparador.single("foto")(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: err.message || "Error al subir la foto" });
+    if (!req.file) return res.status(400).json({ error: "No se recibió ninguna imagen" });
+    try {
+      const url = `/uploads/preparadores/${req.file.filename}?v=${Date.now()}`;
+      await db.query("UPDATE preparadores SET foto_perfil = ? WHERE id = ?", [url, req.params.id]);
+      res.json({ foto_perfil: url });
+    } catch {
+      res.status(500).json({ error: "Error al guardar la foto" });
+    }
+  });
 });
 
 // GET /api/piloto/mis-carreras

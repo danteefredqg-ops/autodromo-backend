@@ -18,10 +18,11 @@ router.get("/", async (req, res) => {
 // POST /api/categorias
 router.post("/", autenticar, autorizar("admin"), async (req, res) => {
   try {
-    const { nombre, descripcion, color } = req.body;
+    const { nombre, descripcion, color, costo_default } = req.body;
+    if (!nombre || !nombre.trim()) return res.status(400).json({ error: "Nombre requerido" });
     const [result] = await db.query(
-      "INSERT INTO categorias (nombre,descripcion,color) VALUES (?,?,?)",
-      [nombre, descripcion || null, color || "#e63946"]
+      "INSERT INTO categorias (nombre,descripcion,color,costo_default) VALUES (?,?,?,?)",
+      [nombre.trim(), descripcion || null, color || "#e63946", costo_default || null]
     );
     const [nueva] = await db.query("SELECT * FROM categorias WHERE id = ? LIMIT 1", [result.insertId]);
     res.status(201).json(nueva[0]);
@@ -34,13 +35,28 @@ router.post("/", autenticar, autorizar("admin"), async (req, res) => {
 // PUT /api/categorias/:id
 router.put("/:id", autenticar, autorizar("admin"), async (req, res) => {
   try {
-    const { nombre, descripcion, color } = req.body;
-    await db.query("UPDATE categorias SET nombre=?,descripcion=?,color=? WHERE id=?",
-      [nombre, descripcion || null, color || "#e63946", req.params.id]);
+    const { nombre, descripcion, color, costo_default } = req.body;
+    if (!nombre || !nombre.trim()) return res.status(400).json({ error: "Nombre requerido" });
+    await db.query("UPDATE categorias SET nombre=?,descripcion=?,color=?,costo_default=? WHERE id=?",
+      [nombre.trim(), descripcion || null, color || "#e63946", costo_default || null, req.params.id]);
     const [rows] = await db.query("SELECT * FROM categorias WHERE id = ? LIMIT 1", [req.params.id]);
     res.json(rows[0]);
-  } catch {
+  } catch (err) {
+    if (err.code === "ER_DUP_ENTRY") return res.status(409).json({ error: "Ya existe otra categoría con ese nombre" });
     res.status(500).json({ error: "Error al actualizar categoría" });
+  }
+});
+
+// DELETE /api/categorias/:id
+router.delete("/:id", autenticar, autorizar("admin"), async (req, res) => {
+  try {
+    const [insc] = await db.query("SELECT COUNT(*) AS cnt FROM inscripciones WHERE categoria_id = ?", [req.params.id]);
+    if (insc[0].cnt > 0) return res.status(409).json({ error: "No se puede eliminar: tiene inscripciones registradas" });
+    await db.query("UPDATE categorias SET activo = 0 WHERE id = ?", [req.params.id]);
+    await db.query("DELETE FROM campeonato_categorias WHERE categoria_id = ?", [req.params.id]);
+    res.json({ mensaje: "Categoría eliminada" });
+  } catch {
+    res.status(500).json({ error: "Error al eliminar categoría" });
   }
 });
 

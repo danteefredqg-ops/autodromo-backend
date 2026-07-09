@@ -96,7 +96,7 @@ router.post("/", autenticar, autorizar("admin", "inscripciones"), async (req, re
 router.patch("/:id/pagar", autenticar, autorizar("admin", "inscripciones"), async (req, res) => {
   try {
     const { metodo_pago, monto_pago } = req.body;
-    const metodo = ["Efectivo", "Transferencia"].includes(metodo_pago) ? metodo_pago : "Efectivo";
+    const metodo = ["Efectivo", "Transferencia", "Intercambio"].includes(metodo_pago) ? metodo_pago : "Efectivo";
     await db.query(
       "UPDATE inscripciones SET estatus='Pagado', metodo_pago=?, monto_pago=?, pagado_en=NOW(), pagado_por=? WHERE id=?",
       [metodo, monto_pago || null, req.usuario.username, req.params.id]
@@ -113,6 +113,29 @@ router.patch("/:id/pagar", autenticar, autorizar("admin", "inscripciones"), asyn
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Error al registrar pago" });
+  }
+});
+
+// PATCH /api/inscripciones/:id/vehiculo — admin/inscripciones/torre (torre solo puede tocar esto)
+router.patch("/:id/vehiculo", autenticar, autorizar("admin", "inscripciones", "torre"), async (req, res) => {
+  try {
+    const { vehiculo, modelo_vehiculo, anio_vehiculo, color_vehiculo, apodo_vehiculo } = req.body;
+    if (!vehiculo || !vehiculo.trim()) return res.status(400).json({ error: "La marca del vehículo es obligatoria" });
+    await db.query(
+      "UPDATE inscripciones SET vehiculo=?, modelo_vehiculo=?, anio_vehiculo=?, color_vehiculo=?, apodo_vehiculo=? WHERE id=?",
+      [vehiculo.trim(), modelo_vehiculo || null, anio_vehiculo || null, color_vehiculo || null, apodo_vehiculo || null, req.params.id]
+    );
+    const [rows] = await db.query(
+      `SELECT i.*, p.nombre_completo AS piloto_nombre, cat.nombre AS categoria_nombre
+       FROM inscripciones i
+       JOIN pilotos   p   ON p.id   = i.piloto_id
+       JOIN categorias cat ON cat.id = i.categoria_id
+       WHERE i.id = ? LIMIT 1`,
+      [req.params.id]
+    );
+    res.json(rows[0]);
+  } catch {
+    res.status(500).json({ error: "Error al actualizar vehículo" });
   }
 });
 
