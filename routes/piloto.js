@@ -38,30 +38,54 @@ const uploadFotoPreparador = multer({
 });
 
 // POST /api/piloto/crear-acceso
+// Si ya existe un piloto con ese email (porque un admin lo dio de alta o porque ya se
+// pre-inscribió a una carrera), solo le asigna contraseña. Si nunca ha existido y manda
+// también nombres/apellido_paterno/tipo_sangre, se crea un piloto nuevo sin número de
+// piloto todavía (se le asigna cuando se inscriba a su primera carrera).
 router.post("/crear-acceso", loginLimit, async (req, res) => {
   try {
-    const { email, numero, password } = req.body;
+    const { email, numero, password, apellido_paterno, apellido_materno, nombres, tipo_sangre } = req.body;
     if (!email || !password) return res.status(400).json({ error: "Email y contraseña son requeridos" });
     if (password.length < 6) return res.status(400).json({ error: "La contraseña debe tener al menos 6 caracteres" });
+    const emailLimpio = email.trim().toLowerCase();
     let rows;
     if (numero && parseInt(numero) > 0) {
       [rows] = await db.query(
         "SELECT id, password FROM pilotos WHERE email = ? AND numero_piloto = ? AND activo = 1 LIMIT 1",
-        [email.trim().toLowerCase(), parseInt(numero)]
+        [emailLimpio, parseInt(numero)]
       );
       if (rows.length === 0) return res.status(404).json({ error: "No encontramos un piloto con ese email y número. Verifica que el número sea correcto." });
     } else {
       [rows] = await db.query(
         "SELECT id, password FROM pilotos WHERE email = ? AND (numero_piloto IS NULL OR numero_piloto = 0) AND activo = 1 LIMIT 1",
-        [email.trim().toLowerCase()]
+        [emailLimpio]
       );
-      if (rows.length === 0) return res.status(404).json({ error: "No encontramos tu cuenta solo con el correo. Si ya tienes número de piloto asignado, inclúyelo para verificar tu identidad." });
+      if (rows.length === 0) {
+        if (!apellido_paterno || !nombres || !tipo_sangre) {
+          return res.status(404).json({
+            error: "No encontramos tu cuenta. Si es tu primera vez, agrega tu nombre y tipo de sangre para crear tu cuenta nueva.",
+            requiere_datos_nuevos: true,
+          });
+        }
+        const nombre_completo = [nombres, apellido_paterno, apellido_materno].filter(Boolean).join(" ");
+        const hash = await bcrypt.hash(password, 10);
+        const [result] = await db.query(
+          `INSERT INTO pilotos (apellido_paterno, apellido_materno, nombres, nombre_completo, email, tipo_sangre, password)
+           VALUES (?,?,?,?,?,?,?)`,
+          [apellido_paterno, apellido_materno || null, nombres, nombre_completo, emailLimpio, tipo_sangre, hash]
+        );
+        return res.status(201).json({ mensaje: "Cuenta creada correctamente. Ya puedes iniciar sesión.", piloto_id: result.insertId });
+      }
     }
     if (rows[0].password) return res.status(409).json({ error: "Ya tienes acceso al portal. Usa tu contraseña para entrar; si la olvidaste, contacta a Autódromo Monterrey." });
     const hash = await bcrypt.hash(password, 10);
     await db.query("UPDATE pilotos SET password = ? WHERE id = ?", [hash, rows[0].id]);
     res.json({ mensaje: "Acceso creado correctamente. Ya puedes iniciar sesión." });
-  } catch { res.status(500).json({ error: "Error al crear acceso" }); }
+  } catch (err) {
+    if (err.code === "ER_DUP_ENTRY") return res.status(409).json({ error: "Ese email ya está registrado" });
+    console.error(err);
+    res.status(500).json({ error: "Error al crear acceso" });
+  }
 });
 
 // POST /api/piloto/login
