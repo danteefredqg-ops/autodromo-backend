@@ -165,7 +165,7 @@ router.patch("/mi-perfil", autenticarPiloto, async (req, res) => {
     res.json(datos);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Error al actualizar perfil", debug: err.sqlMessage || err.message, code: err.code });
+    res.status(500).json({ error: "Error al actualizar perfil" });
   }
 });
 

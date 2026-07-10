@@ -279,6 +279,7 @@ async function inicializarBD() {
   try { await db.query("ALTER TABLE campeonatos MODIFY COLUMN fecha DATE NULL"); } catch {}
   try { await db.query("ALTER TABLE inscripciones MODIFY COLUMN metodo_pago ENUM('Efectivo','Transferencia','Intercambio')"); } catch {}
   try { await db.query("ALTER TABLE pilotos MODIFY COLUMN tipo_sangre VARCHAR(5) NULL"); } catch {}
+  try { await db.query("ALTER TABLE pilotos MODIFY COLUMN escolaridad VARCHAR(60) NULL"); } catch {}
 
   // 6. Etapa 1 para campeonatos sin etapas
   if (await tablaExiste("etapas")) {
