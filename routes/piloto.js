@@ -134,6 +134,12 @@ router.patch("/mi-perfil", autenticarPiloto, async (req, res) => {
         }
       }
     }
+    const requeridos = { tipo_sangre: "Tipo de sangre", nacionalidad: "Nacionalidad" };
+    for (const [campo, etiqueta] of Object.entries(requeridos)) {
+      if (campo in req.body && !req.body[campo]) {
+        return res.status(400).json({ error: `${etiqueta} no puede quedar vacío` });
+      }
+    }
     const sets = [], vals = [];
     for (const [k, v] of Object.entries(req.body)) {
       if (permitidos.includes(k) && v !== undefined) { sets.push(`\`${k}\` = ?`); vals.push(v || null); }
