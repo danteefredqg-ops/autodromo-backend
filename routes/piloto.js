@@ -69,12 +69,21 @@ router.post("/crear-acceso", loginLimit, async (req, res) => {
         }
         const nombre_completo = [nombres, apellido_paterno, apellido_materno].filter(Boolean).join(" ");
         const hash = await bcrypt.hash(password, 10);
-        const [result] = await db.query(
-          `INSERT INTO pilotos (apellido_paterno, apellido_materno, nombres, nombre_completo, email, tipo_sangre, password)
-           VALUES (?,?,?,?,?,?,?)`,
-          [apellido_paterno, apellido_materno || null, nombres, nombre_completo, emailLimpio, tipo_sangre, hash]
-        );
-        return res.status(201).json({ mensaje: "Cuenta creada correctamente. Ya puedes iniciar sesión.", piloto_id: result.insertId });
+        try {
+          const [result] = await db.query(
+            `INSERT INTO pilotos (apellido_paterno, apellido_materno, nombres, nombre_completo, email, tipo_sangre, password)
+             VALUES (?,?,?,?,?,?,?)`,
+            [apellido_paterno, apellido_materno || null, nombres, nombre_completo, emailLimpio, tipo_sangre, hash]
+          );
+          return res.status(201).json({ mensaje: "Cuenta creada correctamente. Ya puedes iniciar sesión.", piloto_id: result.insertId });
+        } catch (errInsert) {
+          if (errInsert.code === "ER_DUP_ENTRY") {
+            return res.status(409).json({
+              error: "Ya existe una cuenta con ese correo. Si ya tienes número de piloto asignado, inclúyelo arriba para verificar tu identidad; si no, usa tu contraseña para entrar.",
+            });
+          }
+          throw errInsert;
+        }
       }
     }
     if (rows[0].password) return res.status(409).json({ error: "Ya tienes acceso al portal. Usa tu contraseña para entrar; si la olvidaste, contacta a Autódromo Monterrey." });
