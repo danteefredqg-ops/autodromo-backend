@@ -110,9 +110,11 @@ router.put("/:id", autenticar, autorizar("admin"), async (req, res) => {
   try {
     const { nombre, descripcion, ubicacion, categorias } = req.body;
     if (!nombre) return res.status(400).json({ error: "Nombre requerido" });
+    // ubicacion es opcional en el modal de edición: si no se manda, conserva la actual
+    // en vez de resetearla al valor por defecto.
     await db.query(
-      "UPDATE campeonatos SET nombre=?,descripcion=?,ubicacion=? WHERE id=?",
-      [nombre, descripcion || null, ubicacion || "Autódromo Monterrey", req.params.id]
+      "UPDATE campeonatos SET nombre=?,descripcion=?,ubicacion=COALESCE(?,ubicacion) WHERE id=?",
+      [nombre, descripcion || null, ubicacion || null, req.params.id]
     );
     if (Array.isArray(categorias)) {
       await db.query("DELETE FROM campeonato_categorias WHERE campeonato_id = ?", [req.params.id]);
@@ -122,6 +124,7 @@ router.put("/:id", autenticar, autorizar("admin"), async (req, res) => {
       }
     }
     const [rows] = await db.query("SELECT * FROM campeonatos WHERE id = ? LIMIT 1", [req.params.id]);
+    if (rows.length === 0) return res.status(404).json({ error: "Campeonato no encontrado" });
     res.json(rows[0]);
   } catch {
     res.status(500).json({ error: "Error al actualizar campeonato" });
@@ -131,6 +134,8 @@ router.put("/:id", autenticar, autorizar("admin"), async (req, res) => {
 // DELETE /api/campeonatos/:id
 router.delete("/:id", autenticar, autorizar("admin"), async (req, res) => {
   try {
+    const [existe] = await db.query("SELECT id FROM campeonatos WHERE id = ? AND activo = 1 LIMIT 1", [req.params.id]);
+    if (existe.length === 0) return res.status(404).json({ error: "Campeonato no encontrado" });
     const [insc] = await db.query(
       "SELECT COUNT(*) AS cnt FROM inscripciones i JOIN etapas e ON e.id = i.etapa_id WHERE e.campeonato_id = ?",
       [req.params.id]

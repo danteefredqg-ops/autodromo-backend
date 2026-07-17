@@ -184,9 +184,22 @@ router.post("/auto-registro", autoRegistroLimit, async (req, res) => {
     let campId = directCampId;
     let etId   = etapa_id || null;
     if (etapa_id) {
-      const [etRow] = await db.query("SELECT campeonato_id FROM etapas WHERE id = ? AND activo = 1 LIMIT 1", [etapa_id]);
+      const [etRow] = await db.query(
+        "SELECT campeonato_id, fecha_apertura_inscripcion, fecha_cierre_inscripcion FROM etapas WHERE id = ? AND activo = 1 LIMIT 1",
+        [etapa_id]
+      );
       if (etRow.length === 0) return res.status(404).json({ error: "Etapa no encontrada" });
       campId = etRow[0].campeonato_id;
+      // No usar CURDATE(): el servidor de MySQL puede correr en UTC y desfasar
+      // la fecha varias horas respecto a Monterrey (UTC-6 fijo, sin horario de verano).
+      const hoyMx = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const { fecha_apertura_inscripcion: apertura, fecha_cierre_inscripcion: cierre } = etRow[0];
+      if (apertura && hoyMx < apertura.toISOString().slice(0, 10)) {
+        return res.status(403).json({ error: "Las inscripciones para esta etapa aún no abren" });
+      }
+      if (cierre && hoyMx > cierre.toISOString().slice(0, 10)) {
+        return res.status(403).json({ error: "Las inscripciones para esta etapa ya cerraron" });
+      }
     }
 
     const ahora   = new Date();
@@ -251,14 +264,19 @@ router.post("/auto-registro", autoRegistroLimit, async (req, res) => {
       );
     }
 
-    if (etId) {
-      const [dup] = await db.query(
-        "SELECT id FROM inscripciones WHERE piloto_id = ? AND etapa_id = ? AND categoria_id = ? LIMIT 1",
-        [piloto_id, etId, categoria_id]
-      );
-      if (dup.length > 0) {
-        return res.status(409).json({ error: "Ya estás inscrito en esta categoría para esta etapa" });
-      }
+    // Sin etapa_id, el UNIQUE KEY (etapa_id, categoria_id, piloto_id) no protege el
+    // duplicado porque MySQL trata cada NULL como distinto — hay que checarlo a mano.
+    const [dup] = etId
+      ? await db.query(
+          "SELECT id FROM inscripciones WHERE piloto_id = ? AND etapa_id = ? AND categoria_id = ? LIMIT 1",
+          [piloto_id, etId, categoria_id]
+        )
+      : await db.query(
+          "SELECT id FROM inscripciones WHERE piloto_id = ? AND campeonato_id = ? AND categoria_id = ? AND etapa_id IS NULL LIMIT 1",
+          [piloto_id, campId, categoria_id]
+        );
+    if (dup.length > 0) {
+      return res.status(409).json({ error: "Ya estás inscrito en esta categoría para este campeonato" });
     }
 
     const [result] = await db.query(

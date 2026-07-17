@@ -54,20 +54,33 @@ router.post("/", autenticar, autorizar("admin", "inscripciones"), async (req, re
       }
     }
 
-    await db.query("DELETE FROM resultados WHERE etapa_id = ? AND categoria_id = ?", [etapa_id, categoria_id]);
-    if (resultados.length > 0) {
-      const vals = resultados.map(r => {
-        const estatus = r.estatus || "Finalizado";
-        const posicion = estatus === "Finalizado" ? Number(r.posicion) : null;
-        return [
-          etapa_id, categoria_id, r.piloto_id, posicion, estatus,
-          r.tiempo_vuelta || null, puntosParaPosicion(posicion, estatus), r.notas || null,
-        ];
-      });
-      await db.query(
-        "INSERT INTO resultados (etapa_id,categoria_id,piloto_id,posicion,estatus,tiempo_vuelta,puntos,notas) VALUES ?",
-        [vals]
-      );
+    // DELETE+INSERT dentro de una transacción: si dos envíos para la misma
+    // etapa+categoría llegan casi simultáneos, uno espera al otro en vez de
+    // entrelazarse y perder/duplicar resultados.
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.query("DELETE FROM resultados WHERE etapa_id = ? AND categoria_id = ?", [etapa_id, categoria_id]);
+      if (resultados.length > 0) {
+        const vals = resultados.map(r => {
+          const estatus = r.estatus || "Finalizado";
+          const posicion = estatus === "Finalizado" ? Number(r.posicion) : null;
+          return [
+            etapa_id, categoria_id, r.piloto_id, posicion, estatus,
+            r.tiempo_vuelta || null, puntosParaPosicion(posicion, estatus), r.notas || null,
+          ];
+        });
+        await conn.query(
+          "INSERT INTO resultados (etapa_id,categoria_id,piloto_id,posicion,estatus,tiempo_vuelta,puntos,notas) VALUES ?",
+          [vals]
+        );
+      }
+      await conn.commit();
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
     }
     res.json({ mensaje: `${resultados.length} resultado(s) guardados` });
   } catch (err) {

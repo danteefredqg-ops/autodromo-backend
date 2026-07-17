@@ -34,9 +34,16 @@ router.post("/", autenticar, autorizar("admin"), async (req, res) => {
 // PATCH /api/usuarios/:id/activar
 router.patch("/:id/activar", autenticar, autorizar("admin"), async (req, res) => {
   try {
-    const [rows] = await db.query("SELECT activo FROM usuarios WHERE id = ? LIMIT 1", [req.params.id]);
+    const [rows] = await db.query("SELECT activo, rol FROM usuarios WHERE id = ? LIMIT 1", [req.params.id]);
     if (rows.length === 0) return res.status(404).json({ error: "Usuario no encontrado" });
     const nuevo = rows[0].activo ? 0 : 1;
+    if (nuevo === 0 && rows[0].rol === "admin") {
+      const [[{ cnt }]] = await db.query(
+        "SELECT COUNT(*) AS cnt FROM usuarios WHERE rol = 'admin' AND activo = 1 AND id != ?",
+        [req.params.id]
+      );
+      if (cnt === 0) return res.status(409).json({ error: "No puedes desactivar al único administrador activo" });
+    }
     await db.query("UPDATE usuarios SET activo = ? WHERE id = ?", [nuevo, req.params.id]);
     res.json({ activo: nuevo });
   } catch {

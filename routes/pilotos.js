@@ -10,6 +10,7 @@ const uploadFoto = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, PILOTOS_DIR),
     filename: (req, file, cb) => {
+      if (!/^\d+$/.test(req.params.id)) return cb(new Error("ID de piloto inválido"));
       const ext = path.extname(file.originalname).toLowerCase() || ".jpg";
       cb(null, `${req.params.id}${ext}`);
     },
@@ -22,15 +23,19 @@ const uploadFoto = multer({
 });
 
 // GET /api/pilotos/buscar-por-email  — público, sin auth
+// Requiere email + número de piloto juntos para evitar que cualquiera enumere
+// correos y obtenga datos sensibles (tipo de sangre) con solo adivinar un email.
 router.get("/buscar-por-email", autoRegistroLimit, async (req, res) => {
   try {
-    const { email } = req.query;
-    if (!email) return res.status(400).json({ error: "Email requerido" });
+    const { email, numero } = req.query;
+    if (!email || !numero || !(parseInt(numero) > 0)) {
+      return res.status(400).json({ error: "Email y número de piloto son requeridos" });
+    }
     const [rows] = await db.query(
       `SELECT id, nombre_completo, apellido_paterno, apellido_materno, nombres,
               tipo_sangre, numero_piloto, numero_piloto_anterior, nacionalidad
-       FROM pilotos WHERE email = ? AND activo = 1 LIMIT 1`,
-      [email]
+       FROM pilotos WHERE email = ? AND numero_piloto = ? AND activo = 1 LIMIT 1`,
+      [email, parseInt(numero)]
     );
     if (rows.length === 0) return res.status(404).json({ error: "Piloto no encontrado" });
     res.json(rows[0]);

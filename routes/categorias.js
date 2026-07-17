@@ -40,6 +40,7 @@ router.put("/:id", autenticar, autorizar("admin"), async (req, res) => {
     await db.query("UPDATE categorias SET nombre=?,descripcion=?,color=?,costo_default=? WHERE id=?",
       [nombre.trim(), descripcion || null, color || "#e63946", costo_default || null, req.params.id]);
     const [rows] = await db.query("SELECT * FROM categorias WHERE id = ? LIMIT 1", [req.params.id]);
+    if (rows.length === 0) return res.status(404).json({ error: "Categoría no encontrada" });
     res.json(rows[0]);
   } catch (err) {
     if (err.code === "ER_DUP_ENTRY") return res.status(409).json({ error: "Ya existe otra categoría con ese nombre" });
@@ -49,14 +50,22 @@ router.put("/:id", autenticar, autorizar("admin"), async (req, res) => {
 
 // DELETE /api/categorias/:id
 router.delete("/:id", autenticar, autorizar("admin"), async (req, res) => {
+  const conn = await db.getConnection();
   try {
-    const [insc] = await db.query("SELECT COUNT(*) AS cnt FROM inscripciones WHERE categoria_id = ?", [req.params.id]);
+    const [existe] = await conn.query("SELECT id FROM categorias WHERE id = ? AND activo = 1 LIMIT 1", [req.params.id]);
+    if (existe.length === 0) return res.status(404).json({ error: "Categoría no encontrada" });
+    const [insc] = await conn.query("SELECT COUNT(*) AS cnt FROM inscripciones WHERE categoria_id = ?", [req.params.id]);
     if (insc[0].cnt > 0) return res.status(409).json({ error: "No se puede eliminar: tiene inscripciones registradas" });
-    await db.query("UPDATE categorias SET activo = 0 WHERE id = ?", [req.params.id]);
-    await db.query("DELETE FROM campeonato_categorias WHERE categoria_id = ?", [req.params.id]);
+    await conn.beginTransaction();
+    await conn.query("UPDATE categorias SET activo = 0 WHERE id = ?", [req.params.id]);
+    await conn.query("DELETE FROM campeonato_categorias WHERE categoria_id = ?", [req.params.id]);
+    await conn.commit();
     res.json({ mensaje: "Categoría eliminada" });
   } catch {
+    await conn.rollback();
     res.status(500).json({ error: "Error al eliminar categoría" });
+  } finally {
+    conn.release();
   }
 });
 

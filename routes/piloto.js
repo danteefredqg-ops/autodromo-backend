@@ -26,6 +26,7 @@ const uploadFotoPreparador = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, PREPARADORES_DIR),
     filename: (req, file, cb) => {
+      if (!/^\d+$/.test(req.params.id)) return cb(new Error("ID de preparador inválido"));
       const ext = path.extname(file.originalname).toLowerCase() || ".jpg";
       cb(null, `${req.params.id}${ext}`);
     },
@@ -88,7 +89,12 @@ router.post("/crear-acceso", loginLimit, async (req, res) => {
     }
     if (rows[0].password) return res.status(409).json({ error: "Ya tienes acceso al portal. Usa tu contraseña para entrar; si la olvidaste, contacta a Autódromo Monterrey." });
     const hash = await bcrypt.hash(password, 10);
-    await db.query("UPDATE pilotos SET password = ? WHERE id = ?", [hash, rows[0].id]);
+    // WHERE password IS NULL hace el UPDATE atómico: si dos requests llegan casi
+    // simultáneas, solo la primera en llegar a MySQL afecta una fila.
+    const [result] = await db.query("UPDATE pilotos SET password = ? WHERE id = ? AND password IS NULL", [hash, rows[0].id]);
+    if (result.affectedRows === 0) {
+      return res.status(409).json({ error: "Ya tienes acceso al portal. Usa tu contraseña para entrar; si la olvidaste, contacta a Autódromo Monterrey." });
+    }
     res.json({ mensaje: "Acceso creado correctamente. Ya puedes iniciar sesión." });
   } catch (err) {
     if (err.code === "ER_DUP_ENTRY") return res.status(409).json({ error: "Ese email ya está registrado" });
@@ -136,7 +142,7 @@ router.patch("/mi-perfil", autenticarPiloto, async (req, res) => {
       'anio_licencia_anterior','anio_inicio_autodromo','ciudad','estado','nacionalidad','fecha_nacimiento'];
     const anioActual = new Date().getFullYear();
     for (const campoAnio of ['anio_licencia_anterior', 'anio_inicio_autodromo']) {
-      if (req.body[campoAnio]) {
+      if (req.body[campoAnio] !== undefined && req.body[campoAnio] !== null && req.body[campoAnio] !== '') {
         const anio = Number(req.body[campoAnio]);
         if (!Number.isInteger(anio) || anio < 1990 || anio > anioActual) {
           return res.status(400).json({ error: `Año inválido en ${campoAnio} (debe estar entre 1990 y ${anioActual})` });
@@ -247,8 +253,12 @@ router.delete("/mis-preparadores/:id", autenticarPiloto, async (req, res) => {
 
 // POST /api/piloto/mis-preparadores/:id/foto
 router.post("/mis-preparadores/:id/foto", autenticarPiloto, async (req, res) => {
-  const [check] = await db.query("SELECT id FROM preparadores WHERE id = ? AND piloto_id = ?", [req.params.id, req.piloto.id]);
-  if (check.length === 0) return res.status(404).json({ error: "Preparador no encontrado" });
+  try {
+    const [check] = await db.query("SELECT id FROM preparadores WHERE id = ? AND piloto_id = ?", [req.params.id, req.piloto.id]);
+    if (check.length === 0) return res.status(404).json({ error: "Preparador no encontrado" });
+  } catch {
+    return res.status(500).json({ error: "Error al verificar preparador" });
+  }
   uploadFotoPreparador.single("foto")(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.message || "Error al subir la foto" });
     if (!req.file) return res.status(400).json({ error: "No se recibió ninguna imagen" });

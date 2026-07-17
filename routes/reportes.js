@@ -47,7 +47,7 @@ router.get("/por-categoria", autenticar, async (req, res) => {
       agrupado[n].total_esperado = agrupado[n].total * costoPorInscripcion;
       if (r.estatus === "Pagado") {
         agrupado[n].pagados++;
-        agrupado[n].total_cobrado += parseFloat(r.monto_pago) || costoPorInscripcion;
+        agrupado[n].total_cobrado += (r.monto_pago !== null && r.monto_pago !== undefined) ? parseFloat(r.monto_pago) : costoPorInscripcion;
       }
     }
     res.json({ agrupado, total: rows.length, costo_etapa: costoPorInscripcion });
@@ -106,8 +106,9 @@ router.get("/corte-general", autenticar, autorizar("admin", "inscripciones"), as
     const efectivo     = pagados.filter(r => r.metodo_pago === "Efectivo");
     const transferencia = pagados.filter(r => r.metodo_pago === "Transferencia");
     const intercambio  = pagados.filter(r => r.metodo_pago === "Intercambio");
-    const ingresos     = pagados.reduce((s, r) => s + (parseFloat(r.monto_pago) || costoPorInscripcion), 0);
-    const ingresosEfectivo = efectivo.reduce((s, r) => s + (parseFloat(r.monto_pago) || costoPorInscripcion), 0);
+    const montoCobrado = (r) => (r.monto_pago !== null && r.monto_pago !== undefined) ? parseFloat(r.monto_pago) : costoPorInscripcion;
+    const ingresos     = pagados.reduce((s, r) => s + montoCobrado(r), 0);
+    const ingresosEfectivo = efectivo.reduce((s, r) => s + montoCobrado(r), 0);
     const esperado     = inscripciones.length * costoPorInscripcion;
 
     const por_categoria = {};
