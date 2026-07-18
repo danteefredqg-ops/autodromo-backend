@@ -1,7 +1,16 @@
 const jwt       = require("jsonwebtoken");
 const rateLimit = require("express-rate-limit");
 
-const JWT_SECRET = process.env.JWT_SECRET || "autodromo_mty_secret_2024";
+// Sin fallback: una clave hardcodeada en el código fuente permitiría forjar
+// tokens de administrador con solo leer el repo. Si falta la variable de
+// entorno, el servidor debe negarse a arrancar, no arrancar "igual mismo".
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  throw new Error(
+    "JWT_SECRET no está configurado. Agrega esta variable de entorno antes de arrancar " +
+    "el servidor (ver backend/.env.example) — sin ella, cualquiera podría forjar tokens válidos."
+  );
+}
 
 const loginLimit = rateLimit({
   windowMs: 15 * 60 * 1000, max: 15, standardHeaders: true, legacyHeaders: false,

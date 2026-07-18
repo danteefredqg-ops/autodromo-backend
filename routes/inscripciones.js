@@ -265,47 +265,63 @@ router.post("/auto-registro", autoRegistroLimit, async (req, res) => {
     }
 
     // Sin etapa_id, el UNIQUE KEY (etapa_id, categoria_id, piloto_id) no protege el
-    // duplicado porque MySQL trata cada NULL como distinto — hay que checarlo a mano.
-    const [dup] = etId
-      ? await db.query(
-          "SELECT id FROM inscripciones WHERE piloto_id = ? AND etapa_id = ? AND categoria_id = ? LIMIT 1",
-          [piloto_id, etId, categoria_id]
-        )
-      : await db.query(
-          "SELECT id FROM inscripciones WHERE piloto_id = ? AND campeonato_id = ? AND categoria_id = ? AND etapa_id IS NULL LIMIT 1",
-          [piloto_id, campId, categoria_id]
-        );
-    if (dup.length > 0) {
-      return res.status(409).json({ error: "Ya estás inscrito en esta categoría para este campeonato" });
+    // duplicado porque MySQL trata cada NULL como distinto. Se usa una transacción
+    // que primero bloquea la fila del piloto (SELECT ... FOR UPDATE) para serializar
+    // dos envíos casi simultáneos del mismo piloto — sin esto, ambos podían pasar el
+    // chequeo de "ya estás inscrito" y crear una inscripción duplicada.
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.query("SELECT id FROM pilotos WHERE id = ? FOR UPDATE", [piloto_id]);
+
+      const [dup] = etId
+        ? await conn.query(
+            "SELECT id FROM inscripciones WHERE piloto_id = ? AND etapa_id = ? AND categoria_id = ? LIMIT 1",
+            [piloto_id, etId, categoria_id]
+          )
+        : await conn.query(
+            "SELECT id FROM inscripciones WHERE piloto_id = ? AND campeonato_id = ? AND categoria_id = ? AND etapa_id IS NULL LIMIT 1",
+            [piloto_id, campId, categoria_id]
+          );
+      if (dup.length > 0) {
+        await conn.rollback();
+        return res.status(409).json({ error: "Ya estás inscrito en esta categoría para este campeonato" });
+      }
+
+      const [result] = await conn.query(
+        `INSERT INTO inscripciones
+          (piloto_id, campeonato_id, etapa_id, categoria_id, numero_piloto, vehiculo,
+           modelo_vehiculo, anio_vehiculo, color_vehiculo, apodo_vehiculo, auto_registro)
+         VALUES (?,?,?,?,?,?,?,?,?,?,1)`,
+        [piloto_id, campId, etId, categoria_id, numero_piloto, vehiculo,
+         modelo_vehiculo || null, anio_vehiculo || null, color_vehiculo || null, apodo_vehiculo || null]
+      );
+
+      const [nueva] = await conn.query(
+        `SELECT i.*, p.nombre_completo AS piloto_nombre,
+                cat.nombre AS categoria_nombre, camp.nombre AS campeonato_nombre,
+                e.nombre AS etapa_nombre
+         FROM inscripciones i
+         JOIN pilotos   p    ON p.id    = i.piloto_id
+         JOIN categorias cat  ON cat.id  = i.categoria_id
+         JOIN campeonatos camp ON camp.id = i.campeonato_id
+         LEFT JOIN etapas e   ON e.id    = i.etapa_id
+         WHERE i.id = ? LIMIT 1`,
+        [result.insertId]
+      );
+
+      await conn.commit();
+      res.status(201).json({
+        mensaje: "Pre-inscripción exitosa",
+        inscripcion: nueva[0],
+        aviso_contrato: (!tieneContrato && !contrato_aceptado) ? { piloto_id, anio: anioActual } : null,
+      });
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
     }
-
-    const [result] = await db.query(
-      `INSERT INTO inscripciones
-        (piloto_id, campeonato_id, etapa_id, categoria_id, numero_piloto, vehiculo,
-         modelo_vehiculo, anio_vehiculo, color_vehiculo, apodo_vehiculo, auto_registro)
-       VALUES (?,?,?,?,?,?,?,?,?,?,1)`,
-      [piloto_id, campId, etId, categoria_id, numero_piloto, vehiculo,
-       modelo_vehiculo || null, anio_vehiculo || null, color_vehiculo || null, apodo_vehiculo || null]
-    );
-
-    const [nueva] = await db.query(
-      `SELECT i.*, p.nombre_completo AS piloto_nombre,
-              cat.nombre AS categoria_nombre, camp.nombre AS campeonato_nombre,
-              e.nombre AS etapa_nombre
-       FROM inscripciones i
-       JOIN pilotos   p    ON p.id    = i.piloto_id
-       JOIN categorias cat  ON cat.id  = i.categoria_id
-       JOIN campeonatos camp ON camp.id = i.campeonato_id
-       LEFT JOIN etapas e   ON e.id    = i.etapa_id
-       WHERE i.id = ? LIMIT 1`,
-      [result.insertId]
-    );
-
-    res.status(201).json({
-      mensaje: "Pre-inscripción exitosa",
-      inscripcion: nueva[0],
-      aviso_contrato: (!tieneContrato && !contrato_aceptado) ? { piloto_id, anio: anioActual } : null,
-    });
   } catch (err) {
     if (err.code === "ER_DUP_ENTRY") {
       return res.status(409).json({ error: "Ya estás inscrito con esa combinación de etapa y categoría" });

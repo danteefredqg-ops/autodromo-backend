@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 3001;
 const ENV_REQUERIDOS = ["MYSQLHOST", "MYSQLUSER", "MYSQLPASSWORD", "MYSQLDATABASE"];
 const faltantes = ENV_REQUERIDOS.filter(v => !process.env[v]);
 if (faltantes.length)      console.warn(`⚠️  Variables faltantes: ${faltantes.join(", ")}`);
-if (!process.env.JWT_SECRET) console.warn("⚠️  JWT_SECRET no configurado — usando clave de desarrollo.");
+if (!process.env.JWT_SECRET) console.warn("⚠️  JWT_SECRET no configurado — el servidor va a rehusarse a arrancar.");
 if (!process.env.UPLOADS_DIR) console.warn("⚠️  UPLOADS_DIR no configurado — las fotos se guardan localmente y se perderán en el próximo deploy. Conecta un Volume en Railway.");
 
 app.use(cors({ origin: process.env.FRONTEND_URL || "*", credentials: true }));
