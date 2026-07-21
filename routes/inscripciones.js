@@ -166,7 +166,7 @@ router.delete("/:id", autenticar, autorizar("admin"), async (req, res) => {
 router.post("/auto-registro", autoRegistroLimit, async (req, res) => {
   try {
     const {
-      etapa_id, campeonato_id: directCampId, categoria_id, numero_piloto,
+      etapa_id, campeonato_id: directCampId, categoria_id, categoria_ids, numero_piloto,
       vehiculo, modelo_vehiculo, anio_vehiculo, color_vehiculo, apodo_vehiculo,
       apellido_paterno, apellido_materno, nombres, email,
       telefono, tipo_sangre, contacto_emergencia, telefono_emergencia,
@@ -174,7 +174,15 @@ router.post("/auto-registro", autoRegistroLimit, async (req, res) => {
       contrato_aceptado,
     } = req.body;
 
-    if (!categoria_id || !numero_piloto || !vehiculo) {
+    // Acepta categoria_id (single, retrocompatible) o categoria_ids (array) —
+    // un piloto puede inscribirse a varias categorías de la misma etapa en un solo envío.
+    const categoriaIds = [...new Set(
+      (Array.isArray(categoria_ids) ? categoria_ids : (categoria_id != null ? [categoria_id] : []))
+        .map(id => parseInt(id))
+        .filter(id => Number.isInteger(id))
+    )];
+
+    if (categoriaIds.length === 0 || !numero_piloto || !vehiculo) {
       return res.status(400).json({ error: "Campos obligatorios incompletos" });
     }
     if (!etapa_id && !directCampId) {
@@ -269,35 +277,49 @@ router.post("/auto-registro", autoRegistroLimit, async (req, res) => {
     // que primero bloquea la fila del piloto (SELECT ... FOR UPDATE) para serializar
     // dos envíos casi simultáneos del mismo piloto — sin esto, ambos podían pasar el
     // chequeo de "ya estás inscrito" y crear una inscripción duplicada.
+    // Se recorre categoriaIds dentro de la misma transacción: cada categoría duplicada
+    // se omite (no aborta el resto) para que un piloto pueda inscribirse a varias
+    // categorías nuevas aunque ya esté inscrito en alguna de ellas.
     const conn = await db.getConnection();
     try {
       await conn.beginTransaction();
       await conn.query("SELECT id FROM pilotos WHERE id = ? FOR UPDATE", [piloto_id]);
 
-      const [dup] = etId
-        ? await conn.query(
-            "SELECT id FROM inscripciones WHERE piloto_id = ? AND etapa_id = ? AND categoria_id = ? LIMIT 1",
-            [piloto_id, etId, categoria_id]
-          )
-        : await conn.query(
-            "SELECT id FROM inscripciones WHERE piloto_id = ? AND campeonato_id = ? AND categoria_id = ? AND etapa_id IS NULL LIMIT 1",
-            [piloto_id, campId, categoria_id]
-          );
-      if (dup.length > 0) {
-        await conn.rollback();
-        return res.status(409).json({ error: "Ya estás inscrito en esta categoría para este campeonato" });
+      const creadas = [];
+      const duplicadas = [];
+
+      for (const catId of categoriaIds) {
+        const [dup] = etId
+          ? await conn.query(
+              "SELECT id FROM inscripciones WHERE piloto_id = ? AND etapa_id = ? AND categoria_id = ? LIMIT 1",
+              [piloto_id, etId, catId]
+            )
+          : await conn.query(
+              "SELECT id FROM inscripciones WHERE piloto_id = ? AND campeonato_id = ? AND categoria_id = ? AND etapa_id IS NULL LIMIT 1",
+              [piloto_id, campId, catId]
+            );
+        if (dup.length > 0) {
+          duplicadas.push(catId);
+          continue;
+        }
+
+        const [result] = await conn.query(
+          `INSERT INTO inscripciones
+            (piloto_id, campeonato_id, etapa_id, categoria_id, numero_piloto, vehiculo,
+             modelo_vehiculo, anio_vehiculo, color_vehiculo, apodo_vehiculo, auto_registro)
+           VALUES (?,?,?,?,?,?,?,?,?,?,1)`,
+          [piloto_id, campId, etId, catId, numero_piloto, vehiculo,
+           modelo_vehiculo || null, anio_vehiculo || null, color_vehiculo || null, apodo_vehiculo || null]
+        );
+        creadas.push(result.insertId);
       }
 
-      const [result] = await conn.query(
-        `INSERT INTO inscripciones
-          (piloto_id, campeonato_id, etapa_id, categoria_id, numero_piloto, vehiculo,
-           modelo_vehiculo, anio_vehiculo, color_vehiculo, apodo_vehiculo, auto_registro)
-         VALUES (?,?,?,?,?,?,?,?,?,?,1)`,
-        [piloto_id, campId, etId, categoria_id, numero_piloto, vehiculo,
-         modelo_vehiculo || null, anio_vehiculo || null, color_vehiculo || null, apodo_vehiculo || null]
-      );
+      if (creadas.length === 0) {
+        await conn.rollback();
+        return res.status(409).json({ error: "Ya estás inscrito en todas las categorías seleccionadas para este campeonato" });
+      }
 
-      const [nueva] = await conn.query(
+      const [nuevas] = await conn.query(
         `SELECT i.*, p.nombre_completo AS piloto_nombre,
                 cat.nombre AS categoria_nombre, camp.nombre AS campeonato_nombre,
                 e.nombre AS etapa_nombre
@@ -306,14 +328,16 @@ router.post("/auto-registro", autoRegistroLimit, async (req, res) => {
          JOIN categorias cat  ON cat.id  = i.categoria_id
          JOIN campeonatos camp ON camp.id = i.campeonato_id
          LEFT JOIN etapas e   ON e.id    = i.etapa_id
-         WHERE i.id = ? LIMIT 1`,
-        [result.insertId]
+         WHERE i.id IN (?)`,
+        [creadas]
       );
 
       await conn.commit();
       res.status(201).json({
         mensaje: "Pre-inscripción exitosa",
-        inscripcion: nueva[0],
+        inscripcion: nuevas[0],
+        inscripciones: nuevas,
+        duplicadas,
         aviso_contrato: (!tieneContrato && !contrato_aceptado) ? { piloto_id, anio: anioActual } : null,
       });
     } catch (err) {
