@@ -37,15 +37,24 @@ router.post("/login-unico", loginLimit, async (req, res) => {
       "SELECT * FROM pilotos WHERE email = ? AND activo = 1 LIMIT 1",
       [id.toLowerCase()]
     );
-    if (pilotos.length > 0 && pilotos[0].password && (await bcrypt.compare(password, pilotos[0].password))) {
+    // pilotos.password es NULLable: un piloto pre-registrado por staff (auto_registro)
+    // existe en la tabla pero aún no "crea su acceso". Si no distinguimos este caso,
+    // el mensaje genérico de abajo no le dice qué hacer — se marca aparte para dar
+    // el mismo mensaje específico que ya daba el /piloto/login original.
+    let pilotoSinAcceso = false;
+    if (pilotos.length > 0) {
       const piloto = pilotos[0];
-      const token = jwt.sign({ id: piloto.id, numero: piloto.numero_piloto, tipo: "piloto" }, JWT_SECRET, { expiresIn: "7d" });
-      const { password: _, ...datos } = piloto;
-      return res.json({ tipo: "piloto", token, piloto: datos });
+      if (!piloto.password) {
+        pilotoSinAcceso = true;
+      } else if (await bcrypt.compare(password, piloto.password)) {
+        const token = jwt.sign({ id: piloto.id, numero: piloto.numero_piloto, tipo: "piloto" }, JWT_SECRET, { expiresIn: "7d" });
+        const { password: _, ...datos } = piloto;
+        return res.json({ tipo: "piloto", token, piloto: datos });
+      }
     }
 
     const [usuarios] = await db.query("SELECT * FROM usuarios WHERE username = ? AND activo = 1 LIMIT 1", [id]);
-    if (usuarios.length > 0 && (await bcrypt.compare(password, usuarios[0].password))) {
+    if (usuarios.length > 0 && usuarios[0].password && (await bcrypt.compare(password, usuarios[0].password))) {
       const usuario = usuarios[0];
       const token = jwt.sign(
         { id: usuario.id, username: usuario.username, rol: usuario.rol, nombre: usuario.nombre },
@@ -54,6 +63,9 @@ router.post("/login-unico", loginLimit, async (req, res) => {
       return res.json({ tipo: "sistema", token, usuario: { id: usuario.id, username: usuario.username, rol: usuario.rol, nombre: usuario.nombre } });
     }
 
+    if (pilotoSinAcceso) {
+      return res.status(401).json({ error: "Aún no tienes acceso creado. Usa la opción 'Crear acceso'." });
+    }
     return res.status(401).json({ error: "Credenciales incorrectas" });
   } catch (err) {
     console.error(err);

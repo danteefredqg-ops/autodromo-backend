@@ -328,7 +328,8 @@ router.post("/auto-registro", autoRegistroLimit, async (req, res) => {
          JOIN categorias cat  ON cat.id  = i.categoria_id
          JOIN campeonatos camp ON camp.id = i.campeonato_id
          LEFT JOIN etapas e   ON e.id    = i.etapa_id
-         WHERE i.id IN (?)`,
+         WHERE i.id IN (?)
+         ORDER BY i.id ASC`,
         [creadas]
       );
 
