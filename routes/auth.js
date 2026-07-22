@@ -24,6 +24,43 @@ router.post("/login", loginLimit, async (req, res) => {
   }
 });
 
+// POST /api/auth/login-unico — un solo formulario para piloto y personal del sistema.
+// Intenta primero como piloto (por email) y si no aplica, como personal (por username),
+// en una sola petición para no duplicar el consumo del rate limit de /login.
+router.post("/login-unico", loginLimit, async (req, res) => {
+  try {
+    const { identificador, password } = req.body;
+    if (!identificador || !password) return res.status(400).json({ error: "Usuario y contraseña requeridos" });
+    const id = identificador.trim();
+
+    const [pilotos] = await db.query(
+      "SELECT * FROM pilotos WHERE email = ? AND activo = 1 LIMIT 1",
+      [id.toLowerCase()]
+    );
+    if (pilotos.length > 0 && pilotos[0].password && (await bcrypt.compare(password, pilotos[0].password))) {
+      const piloto = pilotos[0];
+      const token = jwt.sign({ id: piloto.id, numero: piloto.numero_piloto, tipo: "piloto" }, JWT_SECRET, { expiresIn: "7d" });
+      const { password: _, ...datos } = piloto;
+      return res.json({ tipo: "piloto", token, piloto: datos });
+    }
+
+    const [usuarios] = await db.query("SELECT * FROM usuarios WHERE username = ? AND activo = 1 LIMIT 1", [id]);
+    if (usuarios.length > 0 && (await bcrypt.compare(password, usuarios[0].password))) {
+      const usuario = usuarios[0];
+      const token = jwt.sign(
+        { id: usuario.id, username: usuario.username, rol: usuario.rol, nombre: usuario.nombre },
+        JWT_SECRET, { expiresIn: "8h" }
+      );
+      return res.json({ tipo: "sistema", token, usuario: { id: usuario.id, username: usuario.username, rol: usuario.rol, nombre: usuario.nombre } });
+    }
+
+    return res.status(401).json({ error: "Credenciales incorrectas" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al iniciar sesión" });
+  }
+});
+
 // GET /api/auth/yo
 router.get("/yo", autenticar, async (req, res) => {
   try {
