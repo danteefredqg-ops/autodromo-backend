@@ -230,6 +230,8 @@ async function inicializarBD() {
   await addColIfMissing("categorias", "costo_default",      "DECIMAL(10,2) NULL");
   await addColIfMissing("pilotos", "password",              "VARCHAR(255) NULL");
   await addColIfMissing("pilotos", "foto_vehiculo",         "VARCHAR(300) NULL");
+  await addColIfMissing("pilotos", "reset_token_hash",      "VARCHAR(64) NULL");
+  await addColIfMissing("pilotos", "reset_token_expira",    "DATETIME NULL");
 
   // Tabla preparadores (mecánicos/crew que registra cada piloto para su seguro)
   await db.query(`CREATE TABLE IF NOT EXISTS preparadores (

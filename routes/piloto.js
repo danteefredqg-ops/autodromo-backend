@@ -2,10 +2,12 @@ const router = require("express").Router();
 const bcrypt = require("bcryptjs");
 const jwt    = require("jsonwebtoken");
 const path   = require("path");
+const crypto = require("crypto");
 const multer = require("multer");
 const db     = require("../configuracion/db");
-const { JWT_SECRET, loginLimit, autenticarPiloto } = require("../middleware/auth");
+const { JWT_SECRET, loginLimit, forgotPasswordLimit, autenticarPiloto } = require("../middleware/auth");
 const { PILOTOS_DIR, PREPARADORES_DIR } = require("../configuracion/uploads");
+const { enviarCorreo, correoRecuperacion } = require("../configuracion/mailer");
 
 const uploadFoto = multer({
   storage: multer.diskStorage({
@@ -121,6 +123,82 @@ router.post("/login", loginLimit, async (req, res) => {
     const { password: _, ...datos } = piloto;
     res.json({ token, piloto: datos });
   } catch { res.status(500).json({ error: "Error al iniciar sesión" }); }
+});
+
+// POST /api/piloto/forgot-password — pide el correo y, si la cuenta existe, manda un
+// enlace de recuperación. Siempre responde el mismo mensaje genérico (exista o no la
+// cuenta, tenga o no acceso creado) para no dejar enumerar correos registrados.
+router.post("/forgot-password", forgotPasswordLimit, async (req, res) => {
+  const respuestaGenerica = { mensaje: "Si el correo está registrado, te enviamos un enlace para restablecer tu contraseña." };
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: "Correo requerido" });
+    const emailLimpio = email.trim().toLowerCase();
+
+    const [rows] = await db.query(
+      "SELECT id, nombre_completo, password FROM pilotos WHERE email = ? AND activo = 1 LIMIT 1",
+      [emailLimpio]
+    );
+    if (rows.length === 0 || !rows[0].password) {
+      return res.json(respuestaGenerica); // sin cuenta o sin acceso creado — no hay nada que resetear
+    }
+
+    const piloto     = rows[0];
+    const token      = crypto.randomBytes(32).toString("hex");
+    const tokenHash  = crypto.createHash("sha256").update(token).digest("hex");
+    const expira     = new Date(Date.now() + 60 * 60 * 1000); // 1 hora
+
+    await db.query(
+      "UPDATE pilotos SET reset_token_hash = ?, reset_token_expira = ? WHERE id = ?",
+      [tokenHash, expira, piloto.id]
+    );
+
+    const link = `${process.env.FRONTEND_URL}/Login/restablecer.html?token=${token}`;
+    try {
+      await enviarCorreo({
+        to: emailLimpio,
+        subject: "Recupera tu contraseña — Autódromo Monterrey",
+        html: correoRecuperacion(piloto.nombre_completo, link),
+      });
+    } catch (mailErr) {
+      // No se le informa el fallo al usuario (evitaría enumeración) — se deja registrado
+      // en el log del servidor para que el staff pueda detectarlo y reenviar a mano.
+      console.error("Error al enviar correo de recuperación:", mailErr.message);
+    }
+
+    res.json(respuestaGenerica);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al procesar la solicitud" });
+  }
+});
+
+// POST /api/piloto/reset-password — establece la nueva contraseña usando el token del correo
+router.post("/reset-password", loginLimit, async (req, res) => {
+  try {
+    const { token, password } = req.body;
+    if (!token || !password) return res.status(400).json({ error: "Token y contraseña son requeridos" });
+    if (password.length < 6) return res.status(400).json({ error: "La contraseña debe tener al menos 6 caracteres" });
+
+    const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+    const [rows] = await db.query(
+      "SELECT id FROM pilotos WHERE reset_token_hash = ? AND reset_token_expira > NOW() AND activo = 1 LIMIT 1",
+      [tokenHash]
+    );
+    if (rows.length === 0) {
+      return res.status(400).json({ error: "El enlace es inválido o ya expiró. Solicita uno nuevo." });
+    }
+
+    const hash = await bcrypt.hash(password, 10);
+    await db.query(
+      "UPDATE pilotos SET password = ?, reset_token_hash = NULL, reset_token_expira = NULL WHERE id = ?",
+      [hash, rows[0].id]
+    );
+    res.json({ mensaje: "Contraseña actualizada correctamente. Ya puedes iniciar sesión." });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al restablecer la contraseña" });
+  }
 });
 
 // GET /api/piloto/mi-perfil

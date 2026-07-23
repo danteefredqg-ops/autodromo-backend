@@ -22,6 +22,13 @@ const autoRegistroLimit = rateLimit({
   message: { error: "Demasiadas solicitudes. Espera un momento." },
 });
 
+// Más estricto que loginLimit: evita que se use para enumerar correos
+// registrados o para saturar la cuenta de Resend con envíos.
+const forgotPasswordLimit = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 3, standardHeaders: true, legacyHeaders: false,
+  message: { error: "Demasiadas solicitudes. Intenta de nuevo en 15 minutos." },
+});
+
 function autenticar(req, res, next) {
   const header = req.headers.authorization;
   if (!header || !header.startsWith("Bearer ")) return res.status(401).json({ error: "Token requerido" });
@@ -47,4 +54,4 @@ function autenticarPiloto(req, res, next) {
   } catch { return res.status(401).json({ error: "Token inválido o expirado" }); }
 }
 
-module.exports = { JWT_SECRET, loginLimit, autoRegistroLimit, autenticar, autorizar, autenticarPiloto };
+module.exports = { JWT_SECRET, loginLimit, autoRegistroLimit, forgotPasswordLimit, autenticar, autorizar, autenticarPiloto };
