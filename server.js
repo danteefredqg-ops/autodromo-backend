@@ -16,7 +16,26 @@ if (!process.env.JWT_SECRET) console.warn("⚠️  JWT_SECRET no configurado —
 if (!process.env.UPLOADS_DIR) console.warn("⚠️  UPLOADS_DIR no configurado — las fotos se guardan localmente y se perderán en el próximo deploy. Conecta un Volume en Railway.");
 if (!process.env.RESEND_API_KEY) console.warn("⚠️  RESEND_API_KEY no configurado — la recuperación de contraseña no podrá enviar correos.");
 
-app.use(cors({ origin: process.env.FRONTEND_URL || "*", credentials: true }));
+// CORS — admite una o varias URLs separadas por coma en FRONTEND_URL (por si hay
+// más de un dominio válido, ej. mientras se migra a un dominio propio). Se
+// normalizan sin "/" final porque el header Origin del navegador nunca lo trae —
+// un FRONTEND_URL mal copiado con esa barra de más rompía el CORS en silencio,
+// sin ningún indicio en los logs de qué estaba pasando.
+const origenesPermitidos = (process.env.FRONTEND_URL || "")
+  .split(",").map(o => o.trim().replace(/\/$/, "")).filter(Boolean);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Sin header Origin (curl, apps móviles, servidor-a-servidor) o sin
+    // FRONTEND_URL configurado: se permite, igual que el comportamiento anterior.
+    if (!origin || origenesPermitidos.length === 0 || origenesPermitidos.includes(origin)) {
+      return callback(null, true);
+    }
+    console.warn(`⚠️  CORS bloqueó una petición desde un origen no permitido: ${origin}`);
+    callback(new Error("No permitido por CORS"));
+  },
+  credentials: true,
+}));
 app.use(express.json());
 app.use("/uploads", express.static(UPLOADS_DIR));
 
