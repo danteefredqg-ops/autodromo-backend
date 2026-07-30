@@ -5,6 +5,7 @@ const db      = require("./configuracion/db");
 const { UPLOADS_DIR } = require("./configuracion/uploads");
 
 const { inicializarBD } = require("./db/init");
+const { iniciarProgramadorBackup } = require("./configuracion/backup");
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
@@ -15,6 +16,7 @@ if (faltantes.length)      console.warn(`⚠️  Variables faltantes: ${faltante
 if (!process.env.JWT_SECRET) console.warn("⚠️  JWT_SECRET no configurado — el servidor va a rehusarse a arrancar.");
 if (!process.env.UPLOADS_DIR) console.warn("⚠️  UPLOADS_DIR no configurado — las fotos se guardan localmente y se perderán en el próximo deploy. Conecta un Volume en Railway.");
 if (!process.env.RESEND_API_KEY) console.warn("⚠️  RESEND_API_KEY no configurado — la recuperación de contraseña no podrá enviar correos.");
+if (!process.env.BACKUP_EMAIL) console.warn("⚠️  BACKUP_EMAIL no configurado — no habrá respaldo automático de la base de datos.");
 
 // CORS — admite una o varias URLs separadas por coma en FRONTEND_URL (por si hay
 // más de un dominio válido, ej. mientras se migra a un dominio propio). Se
@@ -62,6 +64,7 @@ app.use("/api/reportes",      require("./routes/reportes"));
 app.use("/api/usuarios",      require("./routes/usuarios"));
 app.use("/api/piloto",        require("./routes/piloto"));
 app.use("/api/resultados",    require("./routes/resultados"));
+app.use("/api/backup",        require("./routes/backup"));
 
 // ─── 404 ──────────────────────────────────────────────────────────────────────
 app.use((req, res) => res.status(404).json({ error: "Ruta no encontrada" }));
@@ -73,6 +76,7 @@ inicializarBD()
       console.log(`\n🏁 Autódromo Monterrey API`);
       console.log(`🚀 Puerto: ${PORT}`);
       console.log(`📦 Listo\n`);
+      iniciarProgramadorBackup();
     });
   })
   .catch(err => {

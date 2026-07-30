@@ -10,13 +10,13 @@ const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null;
 // prueba (onboarding@resend.dev) solo entrega a la cuenta dueña de la API
 // key — no a pilotos reales. Basta con verificar un dominio y cambiar
 // EMAIL_FROM; el código no necesita tocarse.
-async function enviarCorreo({ to, subject, html }) {
+async function enviarCorreo({ to, subject, html, attachments }) {
   if (!resend) {
     throw new Error(
       "RESEND_API_KEY no está configurado — agrega esta variable de entorno para poder enviar correos."
     );
   }
-  const { error } = await resend.emails.send({ from: EMAIL_FROM, to, subject, html });
+  const { error } = await resend.emails.send({ from: EMAIL_FROM, to, subject, html, attachments });
   if (error) {
     throw new Error(`Error al enviar correo: ${error.message || JSON.stringify(error)}`);
   }

@@ -283,6 +283,14 @@ async function inicializarBD() {
   try { await db.query("ALTER TABLE pilotos MODIFY COLUMN tipo_sangre VARCHAR(5) NULL"); } catch {}
   try { await db.query("ALTER TABLE pilotos MODIFY COLUMN escolaridad VARCHAR(60) NULL"); } catch {}
 
+  // Bitácora de respaldos automáticos de la base de datos (ver configuracion/backup.js)
+  await db.query(`CREATE TABLE IF NOT EXISTS backup_log (
+    id        INT AUTO_INCREMENT PRIMARY KEY,
+    ok        TINYINT(1) NOT NULL DEFAULT 1,
+    detalle   VARCHAR(255) NULL,
+    creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )`);
+
   // 6. Etapa 1 para campeonatos sin etapas
   if (await tablaExiste("etapas")) {
     const [camps] = await db.query("SELECT * FROM campeonatos WHERE activo = 1");
