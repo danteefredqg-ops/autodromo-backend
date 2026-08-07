@@ -1,7 +1,7 @@
 const router = require("express").Router();
 const db     = require("../configuracion/db");
 const { autenticar, autorizar, autoRegistroLimit } = require("../middleware/auth");
-const { telefonoValido, limpiarTelefono } = require("../utils/validadores");
+const { telefonoValido, limpiarTelefono, vehiculoValido } = require("../utils/validadores");
 
 // GET /api/inscripciones
 router.get("/", autenticar, async (req, res) => {
@@ -46,6 +46,9 @@ router.post("/", autenticar, autorizar("admin", "inscripciones"), async (req, re
     } = req.body;
     if (!piloto_id || !categoria_id || !numero_piloto || !vehiculo) {
       return res.status(400).json({ error: "Campos obligatorios incompletos" });
+    }
+    if (!vehiculoValido(vehiculo)) {
+      return res.status(400).json({ error: "El vehículo indicado no es válido para competir en el autódromo" });
     }
     if (!etapa_id && !directCampId) {
       return res.status(400).json({ error: "Se requiere etapa_id o campeonato_id" });
@@ -122,6 +125,7 @@ router.patch("/:id/vehiculo", autenticar, autorizar("admin", "inscripciones", "t
   try {
     const { vehiculo, modelo_vehiculo, anio_vehiculo, color_vehiculo, apodo_vehiculo } = req.body;
     if (!vehiculo || !vehiculo.trim()) return res.status(400).json({ error: "La marca del vehículo es obligatoria" });
+    if (!vehiculoValido(vehiculo)) return res.status(400).json({ error: "El vehículo indicado no es válido para competir en el autódromo" });
     await db.query(
       "UPDATE inscripciones SET vehiculo=?, modelo_vehiculo=?, anio_vehiculo=?, color_vehiculo=?, apodo_vehiculo=? WHERE id=?",
       [vehiculo.trim(), modelo_vehiculo || null, anio_vehiculo || null, color_vehiculo || null, apodo_vehiculo || null, req.params.id]
@@ -185,6 +189,9 @@ router.post("/auto-registro", autoRegistroLimit, async (req, res) => {
 
     if (categoriaIds.length === 0 || !numero_piloto || !vehiculo) {
       return res.status(400).json({ error: "Campos obligatorios incompletos" });
+    }
+    if (!vehiculoValido(vehiculo)) {
+      return res.status(400).json({ error: "El vehículo indicado no es válido para competir en el autódromo" });
     }
     if (!etapa_id && !directCampId) {
       return res.status(400).json({ error: "Se requiere etapa_id o campeonato_id" });

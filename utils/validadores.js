@@ -23,4 +23,28 @@ function curpValido(curp) {
   return CURP_REGEX.test(String(curp).trim().toUpperCase());
 }
 
-module.exports = { telefonoValido, limpiarTelefono, curpValido, CURP_REGEX };
+// Bloqueo básico de vehículos obviamente inválidos para un autódromo (sin
+// motor, o que ni siquiera son un vehículo terrestre). No intenta adivinar
+// si algo SÍ es válido (el campo "vehículo" es texto libre de marca, ej.
+// "Honda", "Tony Kart") — solo rechaza lo evidentemente absurdo (bicicleta,
+// avión, dron, etc.), coincidiendo por palabra completa para no bloquear
+// marcas legítimas que casualmente contengan una de estas palabras.
+const VEHICULOS_BLOQUEADOS = [
+  "bicicleta", "bici", "bicicross",
+  "patin del diablo", "patineta", "monopatin", "patin", "patines",
+  "scooter", "patinete", "skateboard", "longboard",
+  "avion", "avioneta", "helicoptero", "dron", "drone",
+  "triciclo", "carreta", "carreton", "caballo", "bestia",
+];
+
+function quitarAcentos(texto) {
+  return String(texto).normalize("NFD").replace(/[̀-ͯ]/g, "");
+}
+
+function vehiculoValido(texto) {
+  if (!texto) return true;
+  const limpio = quitarAcentos(texto).toLowerCase();
+  return !VEHICULOS_BLOQUEADOS.some(palabra => new RegExp(`\\b${palabra}\\b`).test(limpio));
+}
+
+module.exports = { telefonoValido, limpiarTelefono, curpValido, CURP_REGEX, vehiculoValido };
