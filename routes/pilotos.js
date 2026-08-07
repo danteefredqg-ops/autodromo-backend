@@ -5,6 +5,7 @@ const multer = require("multer");
 const db     = require("../configuracion/db");
 const { autenticar, autorizar, autoRegistroLimit } = require("../middleware/auth");
 const { PILOTOS_DIR } = require("../configuracion/uploads");
+const { telefonoValido, limpiarTelefono, curpValido } = require("../utils/validadores");
 
 const uploadFoto = multer({
   storage: multer.diskStorage({
@@ -112,6 +113,8 @@ router.post("/", autenticar, autorizar("admin", "inscripciones"), async (req, re
     } = req.body;
     const nombre_completo = ncInput || [nombres, apellido_paterno, apellido_materno].filter(Boolean).join(" ");
     if (!nombre_completo) return res.status(400).json({ error: "Nombre requerido" });
+    if (!telefonoValido(telefono)) return res.status(400).json({ error: "El teléfono debe tener 10 dígitos" });
+    if (!telefonoValido(telefono_emergencia)) return res.status(400).json({ error: "El teléfono de emergencia debe tener 10 dígitos" });
     const [result] = await db.query(
       `INSERT INTO pilotos
         (apellido_paterno, apellido_materno, nombres, numero_piloto, nombre_completo,
@@ -120,10 +123,10 @@ router.post("/", autenticar, autorizar("admin", "inscripciones"), async (req, re
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         apellido_paterno || null, apellido_materno || null, nombres || null, numero_piloto || null,
-        nombre_completo, telefono || null, email || null, tipo_sangre || null,
+        nombre_completo, limpiarTelefono(telefono) || null, email || null, tipo_sangre || null,
         direccion || null, ciudad || null, estado || null, nacionalidad || "Mexicana",
         estatus_licencia || "Vigente", numero_licencia || null, fecha_nacimiento || null,
-        contacto_emergencia || null, telefono_emergencia || null, notas || null,
+        contacto_emergencia || null, limpiarTelefono(telefono_emergencia) || null, notas || null,
       ]
     );
     const [nuevo] = await db.query("SELECT * FROM pilotos WHERE id = ? LIMIT 1", [result.insertId]);
@@ -146,6 +149,8 @@ router.put("/:id", autenticar, autorizar("admin", "inscripciones"), async (req, 
     } = req.body;
     const nombre_completo = ncInput || [nombres, apellido_paterno, apellido_materno].filter(Boolean).join(" ");
     if (!nombre_completo) return res.status(400).json({ error: "Nombre requerido" });
+    if (!telefonoValido(telefono)) return res.status(400).json({ error: "El teléfono debe tener 10 dígitos" });
+    if (!telefonoValido(telefono_emergencia)) return res.status(400).json({ error: "El teléfono de emergencia debe tener 10 dígitos" });
     await db.query(
       `UPDATE pilotos SET
         apellido_paterno=?, apellido_materno=?, nombres=?, numero_piloto=?,
@@ -156,10 +161,10 @@ router.put("/:id", autenticar, autorizar("admin", "inscripciones"), async (req, 
        WHERE id=?`,
       [
         apellido_paterno || null, apellido_materno || null, nombres || null, numero_piloto || null,
-        nombre_completo, telefono || null, email || null, tipo_sangre || null,
+        nombre_completo, limpiarTelefono(telefono) || null, email || null, tipo_sangre || null,
         direccion || null, ciudad || null, estado || null, nacionalidad || "Mexicana",
         estatus_licencia || "Vigente", numero_licencia || null, fecha_nacimiento || null,
-        contacto_emergencia || null, telefono_emergencia || null, notas || null,
+        contacto_emergencia || null, limpiarTelefono(telefono_emergencia) || null, notas || null,
         req.params.id,
       ]
     );
@@ -248,13 +253,17 @@ router.patch("/:id/datos-formulario", autenticar, autorizar("admin", "inscripcio
         return res.status(400).json({ error: `Año inválido en ${campo} (debe estar entre 1990 y ${anioActual})` });
       }
     }
+    const curpLimpio = curp ? curp.trim().toUpperCase() : curp;
+    if (curpLimpio && !curpValido(curpLimpio)) {
+      return res.status(400).json({ error: "El CURP no tiene un formato válido (18 caracteres)" });
+    }
     await db.query(
       `UPDATE pilotos SET
         curp=?, escolaridad=?, lugar_nacimiento=?, calle=?, colonia=?, cp=?, num_ext=?, num_int=?,
         parentesco_emergencia=?, alergias=?, condiciones_medicas=?, comision_nacional=?,
         nombre_equipo=?, anio_licencia_anterior=?, anio_inicio_autodromo=?
        WHERE id=?`,
-      [curp||null, escolaridad||null, lugar_nacimiento||null, calle||null, colonia||null, cp||null,
+      [curpLimpio||null, escolaridad||null, lugar_nacimiento||null, calle||null, colonia||null, cp||null,
        num_ext||null, num_int||null, parentesco_emergencia||null, alergias||null,
        condiciones_medicas||null, comision_nacional||null, nombre_equipo||null,
        anio_licencia_anterior||null, anio_inicio_autodromo||null, req.params.id]

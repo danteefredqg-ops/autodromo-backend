@@ -1,6 +1,7 @@
 const router = require("express").Router();
 const db     = require("../configuracion/db");
 const { autenticar, autorizar, autoRegistroLimit } = require("../middleware/auth");
+const { telefonoValido, limpiarTelefono } = require("../utils/validadores");
 
 // GET /api/inscripciones
 router.get("/", autenticar, async (req, res) => {
@@ -230,6 +231,8 @@ router.post("/auto-registro", autoRegistroLimit, async (req, res) => {
       if (!apellido_paterno || !nombres || !tipo_sangre) {
         return res.status(400).json({ error: "Apellido paterno, nombre(s) y tipo de sangre requeridos" });
       }
+      if (!telefonoValido(telefono)) return res.status(400).json({ error: "El teléfono debe tener 10 dígitos" });
+      if (!telefonoValido(telefono_emergencia)) return res.status(400).json({ error: "El teléfono de emergencia debe tener 10 dígitos" });
       const nombre_completo = [nombres, apellido_paterno, apellido_materno].filter(Boolean).join(" ");
       const [result] = await db.query(
         `INSERT INTO pilotos
@@ -239,9 +242,9 @@ router.post("/auto-registro", autoRegistroLimit, async (req, res) => {
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [
           apellido_paterno, apellido_materno || null, nombres, numero_piloto || null,
-          nombre_completo, telefono || null, email || null, tipo_sangre,
+          nombre_completo, limpiarTelefono(telefono) || null, email || null, tipo_sangre,
           ciudad || null, estado || null, nacionalidad || "Mexicana", fecha_nacimiento || null,
-          contacto_emergencia || null, telefono_emergencia || null,
+          contacto_emergencia || null, limpiarTelefono(telefono_emergencia) || null,
         ]
       );
       const [nuevo] = await db.query("SELECT * FROM pilotos WHERE id = ? LIMIT 1", [result.insertId]);

@@ -8,6 +8,7 @@ const db     = require("../configuracion/db");
 const { JWT_SECRET, loginLimit, forgotPasswordLimit, autenticarPiloto } = require("../middleware/auth");
 const { PILOTOS_DIR, PREPARADORES_DIR } = require("../configuracion/uploads");
 const { enviarCorreo, correoRecuperacion } = require("../configuracion/mailer");
+const { telefonoValido, limpiarTelefono, curpValido } = require("../utils/validadores");
 
 const uploadFoto = multer({
   storage: multer.diskStorage({
@@ -233,9 +234,22 @@ router.patch("/mi-perfil", autenticarPiloto, async (req, res) => {
         return res.status(400).json({ error: `${etiqueta} no puede quedar vacío` });
       }
     }
+    for (const campo of ["telefono", "telefono_emergencia"]) {
+      if (req.body[campo] && !telefonoValido(req.body[campo])) {
+        return res.status(400).json({ error: `El ${campo === "telefono" ? "teléfono" : "teléfono de emergencia"} debe tener 10 dígitos` });
+      }
+    }
+    if (req.body.curp) {
+      req.body.curp = req.body.curp.trim().toUpperCase();
+      if (!curpValido(req.body.curp)) {
+        return res.status(400).json({ error: "El CURP no tiene un formato válido (18 caracteres)" });
+      }
+    }
     const sets = [], vals = [];
     for (const [k, v] of Object.entries(req.body)) {
-      if (permitidos.includes(k) && v !== undefined) { sets.push(`\`${k}\` = ?`); vals.push(v || null); }
+      if (!permitidos.includes(k) || v === undefined) continue;
+      const valorFinal = (k === "telefono" || k === "telefono_emergencia") ? limpiarTelefono(v) : v;
+      sets.push(`\`${k}\` = ?`); vals.push(valorFinal || null);
     }
     if (req.body.nueva_password && req.body.nueva_password.length >= 6) {
       sets.push("password = ?");
@@ -273,6 +287,21 @@ const CAMPOS_PREPARADOR = ['apellido_paterno','apellido_materno','nombres','tele
   'tipo_sangre','curp','fecha_nacimiento','nacionalidad','ciudad','estado',
   'contacto_emergencia','telefono_emergencia'];
 
+function validarDatosPreparador(body) {
+  for (const campo of ["telefono", "telefono_emergencia"]) {
+    if (body[campo] && !telefonoValido(body[campo])) {
+      return `El ${campo === "telefono" ? "teléfono" : "teléfono de emergencia"} debe tener 10 dígitos`;
+    }
+  }
+  if (body.curp) {
+    body.curp = body.curp.trim().toUpperCase();
+    if (!curpValido(body.curp)) return "El CURP no tiene un formato válido (18 caracteres)";
+  }
+  if (body.telefono) body.telefono = limpiarTelefono(body.telefono);
+  if (body.telefono_emergencia) body.telefono_emergencia = limpiarTelefono(body.telefono_emergencia);
+  return null;
+}
+
 // GET /api/piloto/mis-preparadores
 router.get("/mis-preparadores", autenticarPiloto, async (req, res) => {
   try {
@@ -289,6 +318,8 @@ router.post("/mis-preparadores", autenticarPiloto, async (req, res) => {
   try {
     const { apellido_paterno, apellido_materno, nombres } = req.body;
     if (!apellido_paterno || !nombres) return res.status(400).json({ error: "Apellido paterno y nombres son requeridos" });
+    const errorValidacion = validarDatosPreparador(req.body);
+    if (errorValidacion) return res.status(400).json({ error: errorValidacion });
     const nombre_completo = [nombres, apellido_paterno, apellido_materno].filter(Boolean).join(" ");
     const vals = CAMPOS_PREPARADOR.map(c => req.body[c] || (c === 'nacionalidad' ? 'Mexicana' : null));
     const [result] = await db.query(
@@ -308,6 +339,8 @@ router.put("/mis-preparadores/:id", autenticarPiloto, async (req, res) => {
     if (check.length === 0) return res.status(404).json({ error: "Preparador no encontrado" });
     const { apellido_paterno, apellido_materno, nombres } = req.body;
     if (!apellido_paterno || !nombres) return res.status(400).json({ error: "Apellido paterno y nombres son requeridos" });
+    const errorValidacion = validarDatosPreparador(req.body);
+    if (errorValidacion) return res.status(400).json({ error: errorValidacion });
     const nombre_completo = [nombres, apellido_paterno, apellido_materno].filter(Boolean).join(" ");
     const vals = CAMPOS_PREPARADOR.map(c => req.body[c] || (c === 'nacionalidad' ? 'Mexicana' : null));
     await db.query(
