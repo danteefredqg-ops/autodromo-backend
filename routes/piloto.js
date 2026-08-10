@@ -4,6 +4,7 @@ const jwt    = require("jsonwebtoken");
 const path   = require("path");
 const crypto = require("crypto");
 const multer = require("multer");
+const { OAuth2Client } = require("google-auth-library");
 const db     = require("../configuracion/db");
 const { JWT_SECRET, loginLimit, forgotPasswordLimit, autenticarPiloto } = require("../middleware/auth");
 const { PILOTOS_DIR, PREPARADORES_DIR } = require("../configuracion/uploads");
@@ -124,6 +125,56 @@ router.post("/login", loginLimit, async (req, res) => {
     const { password: _, ...datos } = piloto;
     res.json({ token, piloto: datos });
   } catch { res.status(500).json({ error: "Error al iniciar sesión" }); }
+});
+
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
+
+// POST /api/piloto/login-google — recibe el ID token que entrega Google Identity
+// Services en el navegador (no una contraseña ni un código) y lo verifica contra
+// los servidores de Google antes de confiar en el correo que trae adentro.
+// Solo funciona para pilotos que YA tienen cuenta con ese correo — si no existe
+// ninguna, se le pide al frontend mandar al piloto a completar su registro
+// normal (Google no da apellidos por separado ni tipo de sangre, campos
+// obligatorios para crear un piloto nuevo).
+router.post("/login-google", loginLimit, async (req, res) => {
+  try {
+    if (!googleClient) {
+      return res.status(503).json({ error: "El login con Google no está configurado en el servidor." });
+    }
+    const { credential } = req.body;
+    if (!credential) return res.status(400).json({ error: "Falta el token de Google" });
+
+    let payload;
+    try {
+      const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: GOOGLE_CLIENT_ID });
+      payload = ticket.getPayload();
+    } catch {
+      return res.status(401).json({ error: "Token de Google inválido o expirado" });
+    }
+    if (!payload.email_verified) {
+      return res.status(401).json({ error: "Tu cuenta de Google no tiene el correo verificado" });
+    }
+
+    const emailGoogle = payload.email.trim().toLowerCase();
+    const [rows] = await db.query("SELECT * FROM pilotos WHERE email = ? AND activo = 1 LIMIT 1", [emailGoogle]);
+    if (rows.length === 0) {
+      return res.status(404).json({
+        error: "No encontramos una cuenta con ese correo de Google. Completa tu registro para crear una.",
+        requiere_registro: true,
+        email: emailGoogle,
+        nombre_sugerido: payload.name || null,
+      });
+    }
+
+    const piloto = rows[0];
+    const token = jwt.sign({ id: piloto.id, numero: piloto.numero_piloto, tipo: "piloto" }, JWT_SECRET, { expiresIn: "7d" });
+    const { password: _, ...datos } = piloto;
+    res.json({ token, piloto: datos });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al iniciar sesión con Google" });
+  }
 });
 
 // POST /api/piloto/forgot-password — pide el correo y, si la cuenta existe, manda un

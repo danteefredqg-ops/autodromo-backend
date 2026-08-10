@@ -17,6 +17,7 @@ if (!process.env.JWT_SECRET) console.warn("⚠️  JWT_SECRET no configurado —
 if (!process.env.UPLOADS_DIR) console.warn("⚠️  UPLOADS_DIR no configurado — las fotos se guardan localmente y se perderán en el próximo deploy. Conecta un Volume en Railway.");
 if (!process.env.RESEND_API_KEY) console.warn("⚠️  RESEND_API_KEY no configurado — la recuperación de contraseña no podrá enviar correos.");
 if (!process.env.BACKUP_EMAIL) console.warn("⚠️  BACKUP_EMAIL no configurado — no habrá respaldo automático de la base de datos.");
+if (!process.env.GOOGLE_CLIENT_ID) console.warn("⚠️  GOOGLE_CLIENT_ID no configurado — el login con Google para pilotos no funcionará.");
 
 // CORS — admite una o varias URLs separadas por coma en FRONTEND_URL (por si hay
 // más de un dominio válido, ej. mientras se migra a un dominio propio). Se
