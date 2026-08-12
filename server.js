@@ -42,6 +42,18 @@ app.use(cors({
 app.use(express.json());
 app.use("/uploads", express.static(UPLOADS_DIR));
 
+// ─── Modo mantenimiento ─────────────────────────────────────────────────────
+// Interruptor manual a pedir explícitamente del usuario (no tocar sin que él
+// lo pida) — bloquea todo uso real del sistema, pero deja /api/health con
+// vida para poder confirmar que el servidor sigue arriba y no está caído.
+const MODO_MANTENIMIENTO = true;
+if (MODO_MANTENIMIENTO) {
+  app.use((req, res, next) => {
+    if (req.path === "/api/health") return next();
+    res.status(503).json({ error: "Servicio temporalmente no disponible. Contacta al administrador." });
+  });
+}
+
 // ─── Health ───────────────────────────────────────────────────────────────────
 app.get("/api/health", async (req, res) => {
   try {
