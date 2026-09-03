@@ -14,7 +14,10 @@ router.get("/", autenticar, async (req, res) => {
         camp.nombre AS campeonato_nombre,
         e.nombre AS etapa_nombre, e.numero AS etapa_numero, e.fecha AS etapa_fecha,
         cat.nombre AS categoria_nombre, cat.color AS categoria_color,
-        COALESCE(cc.costo, cat.costo_default, e.costo, 0) AS costo_categoria
+        COALESCE(cc.costo, cat.costo_default, e.costo, 0) AS costo_categoria,
+        (SELECT i2.vehiculo FROM inscripciones i2
+         WHERE i2.piloto_id = i.piloto_id AND i2.campeonato_id = i.campeonato_id AND i2.categoria_id = i.categoria_id
+         ORDER BY i2.creado_en ASC, i2.id ASC LIMIT 1) AS vehiculo_original
       FROM inscripciones i
       JOIN pilotos   p      ON p.id    = i.piloto_id
       JOIN campeonatos camp  ON camp.id = i.campeonato_id
@@ -30,7 +33,18 @@ router.get("/", autenticar, async (req, res) => {
     if (estatus)          { sql += " AND i.estatus = ?";        params.push(estatus); }
     sql += " ORDER BY i.creado_en DESC, cat.nombre ASC, i.numero_piloto ASC";
     const [rows] = await db.query(sql, params);
-    res.json(rows);
+    // Se compara contra el primer vehículo que ese piloto registró en esa
+    // misma categoría del campeonato (no solo dentro de los resultados
+    // filtrados) — un cambio de vehículo a mitad de temporada puede afectar
+    // los puntos según el reglamento, así que se le avisa al staff.
+    const conVehiculoOriginal = rows.map(r => {
+      const cambioVehiculo = !!(
+        r.vehiculo_original && r.vehiculo &&
+        r.vehiculo.trim().toLowerCase() !== r.vehiculo_original.trim().toLowerCase()
+      );
+      return { ...r, cambio_vehiculo: cambioVehiculo };
+    });
+    res.json(conVehiculoOriginal);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Error al obtener inscripciones" });
