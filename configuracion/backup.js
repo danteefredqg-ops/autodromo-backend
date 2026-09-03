@@ -62,6 +62,15 @@ async function ultimoBackupExitoso() {
   return rows.length ? new Date(rows[0].creado_en) : null;
 }
 
+// BACKUP_EMAIL admite uno o varios correos separados por coma (ej.
+// "tu@correo.com, socio@correo.com") — Resend espera un arreglo, no un
+// string con comas, así que se separa aquí antes de mandarlo.
+function destinatariosBackup() {
+  const raw = process.env.BACKUP_EMAIL;
+  if (!raw) return [];
+  return raw.split(",").map(e => e.trim()).filter(Boolean);
+}
+
 async function ejecutarBackup({ destino }) {
   const fecha = new Date().toISOString().slice(0, 10);
   try {
@@ -73,7 +82,7 @@ async function ejecutarBackup({ destino }) {
              <p style="color:#777;font-size:0.85rem">Para restaurarlo: <code>mysql -u usuario -p base_de_datos &lt; respaldo.sql</code></p>`,
       attachments: [{ filename: `autodromo-backup-${fecha}.sql`, content: Buffer.from(sql, "utf8") }],
     });
-    await registrarBackup(true, `Enviado a ${destino}`);
+    await registrarBackup(true, `Enviado a ${[].concat(destino).join(", ")}`);
     return { ok: true };
   } catch (err) {
     await registrarBackup(false, err.message);
@@ -89,8 +98,8 @@ const INTERVALO_CHEQUEO_MS = 24 * 60 * 60 * 1000; // revisa una vez al día si t
 // si hay deploys seguidos. En vez de eso, se revisa a diario contra la fecha real
 // del último respaldo guardado en la BD (backup_log), que sí sobrevive reinicios.
 function iniciarProgramadorBackup() {
-  const destino = process.env.BACKUP_EMAIL;
-  if (!destino) {
+  const destino = destinatariosBackup();
+  if (destino.length === 0) {
     console.warn("⚠️  BACKUP_EMAIL no configurado — el respaldo automático semanal está desactivado.");
     return;
   }
@@ -101,7 +110,7 @@ function iniciarProgramadorBackup() {
       if (vencido) {
         console.log("📦 Generando respaldo automático de la base de datos...");
         await ejecutarBackup({ destino });
-        console.log(`✅ Respaldo automático enviado a ${destino}`);
+        console.log(`✅ Respaldo automático enviado a ${destino.join(", ")}`);
       }
     } catch (err) {
       console.error("❌ Error en el respaldo automático:", err.message);
@@ -111,4 +120,4 @@ function iniciarProgramadorBackup() {
   setInterval(chequear, INTERVALO_CHEQUEO_MS);
 }
 
-module.exports = { generarBackupSQL, ejecutarBackup, ultimoBackupExitoso, iniciarProgramadorBackup };
+module.exports = { generarBackupSQL, ejecutarBackup, ultimoBackupExitoso, iniciarProgramadorBackup, destinatariosBackup };

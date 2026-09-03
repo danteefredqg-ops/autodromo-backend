@@ -1,6 +1,6 @@
 const router = require("express").Router();
 const { autenticar, autorizar } = require("../middleware/auth");
-const { ejecutarBackup, ultimoBackupExitoso } = require("../configuracion/backup");
+const { ejecutarBackup, ultimoBackupExitoso, destinatariosBackup } = require("../configuracion/backup");
 
 // GET /api/backup/estado — cuándo fue el último respaldo exitoso
 router.get("/estado", autenticar, autorizar("admin"), async (req, res) => {
@@ -15,13 +15,13 @@ router.get("/estado", autenticar, autorizar("admin"), async (req, res) => {
 
 // POST /api/backup/ahora — genera y envía un respaldo inmediatamente
 router.post("/ahora", autenticar, autorizar("admin"), async (req, res) => {
-  const destino = process.env.BACKUP_EMAIL;
-  if (!destino) {
+  const destino = destinatariosBackup();
+  if (destino.length === 0) {
     return res.status(400).json({ error: "BACKUP_EMAIL no está configurado en el servidor." });
   }
   try {
     await ejecutarBackup({ destino });
-    res.json({ mensaje: `Respaldo generado y enviado a ${destino}` });
+    res.json({ mensaje: `Respaldo generado y enviado a ${destino.join(", ")}` });
   } catch (err) {
     console.error("Error al generar respaldo:", err);
     res.status(500).json({ error: err.message || "Error al generar el respaldo" });
