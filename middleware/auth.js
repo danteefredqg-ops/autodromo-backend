@@ -32,7 +32,17 @@ const forgotPasswordLimit = rateLimit({
 function autenticar(req, res, next) {
   const header = req.headers.authorization;
   if (!header || !header.startsWith("Bearer ")) return res.status(401).json({ error: "Token requerido" });
-  try { req.usuario = jwt.verify(header.split(" ")[1], JWT_SECRET); next(); }
+  try {
+    const payload = jwt.verify(header.split(" ")[1], JWT_SECRET);
+    // Este middleware es exclusivo de personal del sistema (admin/inscripciones/torre).
+    // Los pilotos tienen su propio esquema de token (tipo:"piloto", ver autenticarPiloto)
+    // y NO deben poder pasar por aquí — si no se rechaza explícitamente, un piloto
+    // cualquiera podría usar su propio token para leer rutas de staff que solo hacen
+    // autenticar() sin autorizar(), como el listado completo de pilotos o reportes.
+    if (payload.tipo === "piloto") return res.status(403).json({ error: "Acceso solo para personal del sistema" });
+    req.usuario = payload;
+    next();
+  }
   catch { return res.status(401).json({ error: "Token inválido o expirado" }); }
 }
 

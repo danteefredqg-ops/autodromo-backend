@@ -46,12 +46,20 @@ router.get("/buscar-por-email", autoRegistroLimit, async (req, res) => {
   }
 });
 
-// GET /api/pilotos
+// GET /api/pilotos — listado ligero para tablas/búsqueda.
+// OJO: NO usar `p.*` aquí. Esta ruta solo exige autenticar() (cualquier rol
+// del staff, incluido torre, que es de solo lectura), así que nunca debe
+// incluir el hash de password ni datos sensibles (CURP, domicilio, datos
+// médicos, contacto de emergencia, tokens de recuperación). Esos campos
+// solo se sirven en GET /:id, que sí está restringido a admin/inscripciones.
 router.get("/", autenticar, async (req, res) => {
   try {
     const { buscar, estatus_licencia } = req.query;
     let sql = `
-      SELECT p.*,
+      SELECT p.id, p.apellido_paterno, p.apellido_materno, p.nombres, p.nombre_completo,
+        p.numero_piloto, p.numero_piloto_anterior, p.email, p.telefono, p.nacionalidad,
+        p.tipo_sangre, p.numero_licencia, p.estatus_licencia, p.anio_inicio_autodromo,
+        p.foto_perfil, p.activo, p.creado_en,
         (SELECT COUNT(*) FROM inscripciones WHERE piloto_id = p.id) AS total_campeonatos,
         (SELECT cat.nombre FROM inscripciones i2 JOIN categorias cat ON cat.id = i2.categoria_id
          WHERE i2.piloto_id = p.id ORDER BY i2.creado_en DESC LIMIT 1) AS ultima_categoria
@@ -67,7 +75,12 @@ router.get("/", autenticar, async (req, res) => {
     }
     sql += " ORDER BY p.nombre_completo ASC";
     const [rows] = await db.query(sql, params);
-    res.json(rows);
+    // Torre es solo-lectura para consulta de pista: no necesita teléfono ni
+    // nacionalidad (el frontend ya los oculta en pantalla; esto evita que
+    // sigan viajando en el JSON crudo para quien abra las herramientas de red).
+    const esTorre = req.usuario.rol === "torre";
+    const resultado = esTorre ? rows.map(({ telefono, nacionalidad, ...r }) => r) : rows;
+    res.json(resultado);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Error al obtener pilotos" });

@@ -2,8 +2,10 @@ const router = require("express").Router();
 const db     = require("../configuracion/db");
 const { autenticar, autorizar } = require("../middleware/auth");
 
-// GET /api/reportes/por-categoria
-router.get("/por-categoria", autenticar, async (req, res) => {
+// GET /api/reportes/por-categoria — incluye montos/método de pago por piloto,
+// igual que corte-general: debe llevar la misma restricción de rol para que
+// torre (solo lectura de pista) no tenga acceso a cifras de caja por otra puerta.
+router.get("/por-categoria", autenticar, autorizar("admin", "inscripciones"), async (req, res) => {
   try {
     const { campeonato_id, etapa_id, categoria_id } = req.query;
     if (!campeonato_id && !etapa_id) return res.status(400).json({ error: "campeonato_id o etapa_id requerido" });
