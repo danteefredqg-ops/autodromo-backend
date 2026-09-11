@@ -59,7 +59,7 @@ router.get("/", autenticar, async (req, res) => {
       SELECT p.id, p.apellido_paterno, p.apellido_materno, p.nombres, p.nombre_completo,
         p.numero_piloto, p.numero_piloto_anterior, p.email, p.telefono, p.nacionalidad,
         p.tipo_sangre, p.numero_licencia, p.estatus_licencia, p.anio_inicio_autodromo,
-        p.foto_perfil, p.activo, p.creado_en,
+        p.fecha_vencimiento_licencia, p.foto_perfil, p.activo, p.creado_en,
         (SELECT COUNT(*) FROM inscripciones WHERE piloto_id = p.id) AS total_campeonatos,
         (SELECT cat.nombre FROM inscripciones i2 JOIN categorias cat ON cat.id = i2.categoria_id
          WHERE i2.piloto_id = p.id ORDER BY i2.creado_en DESC LIMIT 1) AS ultima_categoria
@@ -123,6 +123,7 @@ router.post("/", autenticar, autorizar("admin", "inscripciones"), async (req, re
       nombre_completo: ncInput, telefono, email, tipo_sangre,
       direccion, ciudad, estado, nacionalidad, estatus_licencia,
       numero_licencia, fecha_nacimiento, contacto_emergencia, telefono_emergencia, notas,
+      fecha_vencimiento_licencia,
     } = req.body;
     const nombre_completo = ncInput || [nombres, apellido_paterno, apellido_materno].filter(Boolean).join(" ");
     if (!nombre_completo) return res.status(400).json({ error: "Nombre requerido" });
@@ -132,14 +133,16 @@ router.post("/", autenticar, autorizar("admin", "inscripciones"), async (req, re
       `INSERT INTO pilotos
         (apellido_paterno, apellido_materno, nombres, numero_piloto, nombre_completo,
          telefono, email, tipo_sangre, direccion, ciudad, estado, nacionalidad,
-         estatus_licencia, numero_licencia, fecha_nacimiento, contacto_emergencia, telefono_emergencia, notas)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         estatus_licencia, numero_licencia, fecha_nacimiento, contacto_emergencia, telefono_emergencia, notas,
+         fecha_vencimiento_licencia)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         apellido_paterno || null, apellido_materno || null, nombres || null, numero_piloto || null,
         nombre_completo, limpiarTelefono(telefono) || null, email || null, tipo_sangre || null,
         direccion || null, ciudad || null, estado || null, nacionalidad || "Mexicana",
         estatus_licencia || "Vigente", numero_licencia || null, fecha_nacimiento || null,
         contacto_emergencia || null, limpiarTelefono(telefono_emergencia) || null, notas || null,
+        fecha_vencimiento_licencia || null,
       ]
     );
     const [nuevo] = await db.query("SELECT * FROM pilotos WHERE id = ? LIMIT 1", [result.insertId]);
@@ -159,6 +162,7 @@ router.put("/:id", autenticar, autorizar("admin", "inscripciones"), async (req, 
       nombre_completo: ncInput, telefono, email, tipo_sangre,
       direccion, ciudad, estado, nacionalidad, estatus_licencia,
       numero_licencia, fecha_nacimiento, contacto_emergencia, telefono_emergencia, notas,
+      fecha_vencimiento_licencia,
     } = req.body;
     const nombre_completo = ncInput || [nombres, apellido_paterno, apellido_materno].filter(Boolean).join(" ");
     if (!nombre_completo) return res.status(400).json({ error: "Nombre requerido" });
@@ -170,7 +174,7 @@ router.put("/:id", autenticar, autorizar("admin", "inscripciones"), async (req, 
         nombre_completo=?, telefono=?, email=?, tipo_sangre=?,
         direccion=?, ciudad=?, estado=?, nacionalidad=?,
         estatus_licencia=?, numero_licencia=?, fecha_nacimiento=?,
-        contacto_emergencia=?, telefono_emergencia=?, notas=?
+        contacto_emergencia=?, telefono_emergencia=?, notas=?, fecha_vencimiento_licencia=?
        WHERE id=?`,
       [
         apellido_paterno || null, apellido_materno || null, nombres || null, numero_piloto || null,
@@ -178,6 +182,7 @@ router.put("/:id", autenticar, autorizar("admin", "inscripciones"), async (req, 
         direccion || null, ciudad || null, estado || null, nacionalidad || "Mexicana",
         estatus_licencia || "Vigente", numero_licencia || null, fecha_nacimiento || null,
         contacto_emergencia || null, limpiarTelefono(telefono_emergencia) || null, notas || null,
+        fecha_vencimiento_licencia || null,
         req.params.id,
       ]
     );
