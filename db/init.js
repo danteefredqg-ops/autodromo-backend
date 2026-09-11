@@ -284,6 +284,24 @@ async function inicializarBD() {
   try { await db.query("ALTER TABLE pilotos MODIFY COLUMN tipo_sangre VARCHAR(5) NULL"); } catch {}
   try { await db.query("ALTER TABLE pilotos MODIFY COLUMN escolaridad VARCHAR(60) NULL"); } catch {}
 
+  // Normaliza el charset/collation de todas las tablas a utf8mb4. Se detectó en
+  // producción que guardar acentos en columnas agregadas después con
+  // addColIfMissing (p.ej. pilotos.comision_nacional, pilotos.estado) fallaba con
+  // un error de MySQL, o guardaba el texto corrupto ("Nuevo León" → "Nuevo Le�n"),
+  // porque esas columnas heredaban un charset distinto al de la conexión
+  // (utf8mb4, ver configuracion/db.js). Convertir la tabla completa es idempotente
+  // — si ya está en utf8mb4, MySQL no hace nada.
+  for (const tabla of [
+    "pilotos", "preparadores", "usuarios", "campeonatos", "etapas", "categorias",
+    "campeonato_categorias", "inscripciones", "resultados", "contratos_anuales",
+  ]) {
+    try {
+      await db.query(`ALTER TABLE \`${tabla}\` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+    } catch (err) {
+      console.warn(`  ⚠️  No se pudo normalizar el charset de ${tabla}: ${err.message}`);
+    }
+  }
+
   // Bitácora de respaldos automáticos de la base de datos (ver configuracion/backup.js)
   await db.query(`CREATE TABLE IF NOT EXISTS backup_log (
     id        INT AUTO_INCREMENT PRIMARY KEY,
