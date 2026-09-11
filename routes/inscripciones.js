@@ -241,11 +241,20 @@ router.post("/auto-registro", autoRegistroLimit, async (req, res) => {
       if (existentes.length > 0) piloto = existentes[0];
     }
 
-    if (!piloto && numero_piloto) {
+    if (numero_piloto && (!piloto || !piloto.numero_piloto)) {
       const [numUsado] = await db.query("SELECT id FROM pilotos WHERE numero_piloto = ? LIMIT 1", [numero_piloto]);
       if (numUsado.length > 0) {
         return res.status(409).json({ error: `El número ${numero_piloto} ya está asignado a otro piloto` });
       }
+    }
+
+    // Un piloto que ya tiene cuenta (p.ej. la creó desde "Crear acceso" sin pasar
+    // por el registro con número) pero aún no tiene numero_piloto asignado: se le
+    // asigna aquí el que eligió, en vez de solo validarlo y desecharlo — si no, el
+    // piloto queda inscrito con numero_piloto NULL en su propia cuenta para siempre.
+    if (piloto && !piloto.numero_piloto && numero_piloto) {
+      await db.query("UPDATE pilotos SET numero_piloto = ? WHERE id = ?", [numero_piloto, piloto.id]);
+      piloto.numero_piloto = numero_piloto;
     }
 
     if (!piloto) {
