@@ -302,6 +302,29 @@ async function inicializarBD() {
     }
   }
 
+  // Limpieza de una sola vez: pilotos ya desactivados ANTES de que DELETE
+  // /api/pilotos/:id liberara email/numero_piloto/numero_licencia (ver
+  // routes/pilotos.js). Sin esto, alguien borrado antes de este cambio se
+  // queda bloqueando su correo/número para siempre — que es exactamente el
+  // bug reportado ("dice que ya existe una cuenta pero yo la eliminé").
+  // Es idempotente: a la próxima vez que arranque el server ya no hay filas
+  // con activo=0 y email sin el prefijo "eliminado_", así que no repite trabajo.
+  try {
+    const [fantasmas] = await db.query(
+      "SELECT id, email FROM pilotos WHERE activo = 0 AND (email IS NOT NULL OR numero_piloto IS NOT NULL OR numero_licencia IS NOT NULL) AND (email IS NULL OR email NOT LIKE 'eliminado\\_%')"
+    );
+    for (const p of fantasmas) {
+      const emailMutilado = p.email ? `eliminado_${p.id}_${p.email}`.slice(0, 150) : null;
+      await db.query(
+        "UPDATE pilotos SET email = ?, numero_licencia = NULL, numero_piloto = NULL, numero_piloto_anterior = NULL WHERE id = ?",
+        [emailMutilado, p.id]
+      );
+    }
+    if (fantasmas.length > 0) console.log(`  + ${fantasmas.length} piloto(s) desactivado(s) liberaron su correo/número/licencia`);
+  } catch (err) {
+    console.warn(`  ⚠️  No se pudo limpiar pilotos desactivados: ${err.message}`);
+  }
+
   // Bitácora de respaldos automáticos de la base de datos (ver configuracion/backup.js)
   await db.query(`CREATE TABLE IF NOT EXISTS backup_log (
     id        INT AUTO_INCREMENT PRIMARY KEY,

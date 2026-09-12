@@ -217,12 +217,42 @@ router.patch("/:id/numero-uno", autenticar, autorizar("admin", "inscripciones"),
   }
 });
 
-// DELETE /api/pilotos/:id
+// DELETE /api/pilotos/:id — borrado suave (activo=0): las inscripciones y
+// resultados históricos guardan su propio numero_piloto/nombre, así que no se
+// pierden al desactivar al piloto.
+//
+// OJO: email, numero_piloto y numero_licencia son UNIQUE en la tabla, y MySQL
+// no distingue "único entre los activos" de "único a secas" — un registro
+// desactivado seguía ocupando su correo/número/licencia para siempre, y
+// cualquiera que intentara registrarse de nuevo con ese mismo correo (incluso
+// horas o meses después) chocaba con un "ya existe una cuenta" fantasma.
+// Por eso aquí se libera explícitamente: el correo se marca como
+// usado-por-un-eliminado (se conserva mutilado por si se necesita auditar
+// después quién lo tenía), y el número de piloto y la licencia se liberan
+// del todo para que alguien más los pueda tomar. Como no existe una función
+// de "restaurar piloto", no hay riesgo de reactivar por accidente una cuenta
+// con el correo ya mutilado.
 router.delete("/:id", autenticar, autorizar("admin"), async (req, res) => {
   try {
-    await db.query("UPDATE pilotos SET activo = 0 WHERE id = ?", [req.params.id]);
+    const [rows] = await db.query("SELECT email FROM pilotos WHERE id = ? LIMIT 1", [req.params.id]);
+    if (rows.length === 0) return res.status(404).json({ error: "Piloto no encontrado" });
+    const { email } = rows[0];
+    // email es VARCHAR(150) — se recorta por si acaso para no toparse con un
+    // truncamiento o error de MySQL al mutilarlo.
+    const emailMutilado = email ? `eliminado_${req.params.id}_${email}`.slice(0, 150) : null;
+    await db.query(
+      `UPDATE pilotos SET
+         activo = 0,
+         email = ?,
+         numero_licencia = NULL,
+         numero_piloto = NULL,
+         numero_piloto_anterior = NULL
+       WHERE id = ?`,
+      [emailMutilado, req.params.id]
+    );
     res.json({ mensaje: "Piloto desactivado" });
-  } catch {
+  } catch (err) {
+    console.error(err);
     res.status(500).json({ error: "Error al desactivar piloto" });
   }
 });
