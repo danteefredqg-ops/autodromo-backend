@@ -264,21 +264,44 @@ router.post("/auto-registro", autoRegistroLimit, async (req, res) => {
       if (!telefonoValido(telefono)) return res.status(400).json({ error: "El teléfono debe tener 10 dígitos" });
       if (!telefonoValido(telefono_emergencia)) return res.status(400).json({ error: "El teléfono de emergencia debe tener 10 dígitos" });
       const nombre_completo = [nombres, apellido_paterno, apellido_materno].filter(Boolean).join(" ");
-      const [result] = await db.query(
-        `INSERT INTO pilotos
-          (apellido_paterno, apellido_materno, nombres, numero_piloto, nombre_completo,
-           telefono, email, tipo_sangre, ciudad, estado, nacionalidad, fecha_nacimiento,
-           contacto_emergencia, telefono_emergencia)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [
-          apellido_paterno, apellido_materno || null, nombres, numero_piloto || null,
-          nombre_completo, limpiarTelefono(telefono) || null, email || null, tipo_sangre,
-          ciudad || null, estado || null, nacionalidad || "Mexicana", fecha_nacimiento || null,
-          contacto_emergencia || null, limpiarTelefono(telefono_emergencia) || null,
-        ]
-      );
-      const [nuevo] = await db.query("SELECT * FROM pilotos WHERE id = ? LIMIT 1", [result.insertId]);
-      piloto = nuevo[0];
+      try {
+        const [result] = await db.query(
+          `INSERT INTO pilotos
+            (apellido_paterno, apellido_materno, nombres, numero_piloto, nombre_completo,
+             telefono, email, tipo_sangre, ciudad, estado, nacionalidad, fecha_nacimiento,
+             contacto_emergencia, telefono_emergencia)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [
+            apellido_paterno, apellido_materno || null, nombres, numero_piloto || null,
+            nombre_completo, limpiarTelefono(telefono) || null, email || null, tipo_sangre,
+            ciudad || null, estado || null, nacionalidad || "Mexicana", fecha_nacimiento || null,
+            contacto_emergencia || null, limpiarTelefono(telefono_emergencia) || null,
+          ]
+        );
+        const [nuevo] = await db.query("SELECT * FROM pilotos WHERE id = ? LIMIT 1", [result.insertId]);
+        piloto = nuevo[0];
+      } catch (errInsert) {
+        if (errInsert.code !== "ER_DUP_ENTRY") throw errInsert;
+        // Dos envíos casi simultáneos (doble tap en el botón, o el celular
+        // reintentando por mala señal) con el mismo correo: ninguno veía todavía
+        // al otro como "ya existe" porque ambos llegaron antes de que el primero
+        // terminara de guardarse. Antes esto tronaba con un genérico "ya estás
+        // inscrito con esa combinación de etapa y categoría", que no tiene nada
+        // que ver con la causa real y confundía a alguien que sí era nuevo.
+        if (email) {
+          const [existentes2] = await db.query("SELECT * FROM pilotos WHERE email = ? AND activo = 1 LIMIT 1", [email]);
+          if (existentes2.length > 0) { piloto = existentes2[0]; }
+        }
+        if (!piloto) {
+          if (/numero_piloto/.test(errInsert.sqlMessage || "")) {
+            return res.status(409).json({ error: `El número ${numero_piloto} ya está asignado a otro piloto` });
+          }
+          if (/email/.test(errInsert.sqlMessage || "")) {
+            return res.status(409).json({ error: "Ya existe una cuenta con ese correo. Si ya tienes número de piloto, inclúyelo para que te identifiquemos; si no, usa 'Ya tengo cuenta'." });
+          }
+          throw errInsert;
+        }
+      }
     }
 
     const piloto_id  = piloto.id;
@@ -382,6 +405,16 @@ router.post("/auto-registro", autoRegistroLimit, async (req, res) => {
     }
   } catch (err) {
     if (err.code === "ER_DUP_ENTRY") {
+      // No asumir a ciegas que es el duplicado de etapa+categoría: el mismo
+      // código de error salta para número de piloto o correo repetidos, y
+      // decirle a alguien nuevo "ya estás inscrito" cuando el problema real es
+      // otro solo confunde.
+      if (/numero_piloto/.test(err.sqlMessage || "")) {
+        return res.status(409).json({ error: `Ese número de piloto ya está asignado a otro piloto` });
+      }
+      if (/\bemail\b/.test(err.sqlMessage || "")) {
+        return res.status(409).json({ error: "Ya existe una cuenta con ese correo." });
+      }
       return res.status(409).json({ error: "Ya estás inscrito con esa combinación de etapa y categoría" });
     }
     console.error(err);
