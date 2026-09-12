@@ -48,16 +48,21 @@ router.put("/:id", autenticar, autorizar("admin"), async (req, res) => {
   }
 });
 
-// DELETE /api/categorias/:id
+// DELETE /api/categorias/:id — borrado suave. `nombre` es UNIQUE, y un
+// registro desactivado seguía ocupando el nombre para siempre (mismo bug que
+// se encontró y arregló en pilotos): borrar "DRAGSTER" por error y volver a
+// crearla tronaba con "Categoría ya existe" aunque ya no apareciera en
+// ninguna lista. Se mutila el nombre al desactivar para liberarlo.
 router.delete("/:id", autenticar, autorizar("admin"), async (req, res) => {
   const conn = await db.getConnection();
   try {
-    const [existe] = await conn.query("SELECT id FROM categorias WHERE id = ? AND activo = 1 LIMIT 1", [req.params.id]);
+    const [existe] = await conn.query("SELECT id, nombre FROM categorias WHERE id = ? AND activo = 1 LIMIT 1", [req.params.id]);
     if (existe.length === 0) return res.status(404).json({ error: "Categoría no encontrada" });
     const [insc] = await conn.query("SELECT COUNT(*) AS cnt FROM inscripciones WHERE categoria_id = ?", [req.params.id]);
     if (insc[0].cnt > 0) return res.status(409).json({ error: "No se puede eliminar: tiene inscripciones registradas" });
+    const nombreMutilado = `eliminada_${req.params.id}_${existe[0].nombre}`.slice(0, 60);
     await conn.beginTransaction();
-    await conn.query("UPDATE categorias SET activo = 0 WHERE id = ?", [req.params.id]);
+    await conn.query("UPDATE categorias SET activo = 0, nombre = ? WHERE id = ?", [nombreMutilado, req.params.id]);
     await conn.query("DELETE FROM campeonato_categorias WHERE categoria_id = ?", [req.params.id]);
     await conn.commit();
     res.json({ mensaje: "Categoría eliminada" });

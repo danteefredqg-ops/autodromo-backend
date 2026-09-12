@@ -325,6 +325,33 @@ async function inicializarBD() {
     console.warn(`  ⚠️  No se pudo limpiar pilotos desactivados: ${err.message}`);
   }
 
+  // Mismo bug, mismo arreglo, para categorías: nombre es UNIQUE y una
+  // categoría desactivada antes de este cambio seguía ocupando su nombre.
+  try {
+    const [catsFantasma] = await db.query(
+      "SELECT id, nombre FROM categorias WHERE activo = 0 AND nombre NOT LIKE 'eliminada\\_%'"
+    );
+    for (const c of catsFantasma) {
+      const nombreMutilado = `eliminada_${c.id}_${c.nombre}`.slice(0, 60);
+      await db.query("UPDATE categorias SET nombre = ? WHERE id = ?", [nombreMutilado, c.id]);
+    }
+    if (catsFantasma.length > 0) console.log(`  + ${catsFantasma.length} categoría(s) desactivada(s) liberaron su nombre`);
+  } catch (err) {
+    console.warn(`  ⚠️  No se pudo limpiar categorías desactivadas: ${err.message}`);
+  }
+
+  // Mismo bug, mismo arreglo, para etapas: (campeonato_id, numero) es UNIQUE
+  // y una etapa desactivada antes de este cambio seguía ocupando su número.
+  try {
+    const [etapasFantasma] = await db.query("SELECT id FROM etapas WHERE activo = 0 AND numero > 0");
+    for (const e of etapasFantasma) {
+      await db.query("UPDATE etapas SET numero = -id WHERE id = ?", [e.id]);
+    }
+    if (etapasFantasma.length > 0) console.log(`  + ${etapasFantasma.length} etapa(s) desactivada(s) liberaron su número`);
+  } catch (err) {
+    console.warn(`  ⚠️  No se pudo limpiar etapas desactivadas: ${err.message}`);
+  }
+
   // Bitácora de respaldos automáticos de la base de datos (ver configuracion/backup.js)
   await db.query(`CREATE TABLE IF NOT EXISTS backup_log (
     id        INT AUTO_INCREMENT PRIMARY KEY,

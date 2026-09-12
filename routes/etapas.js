@@ -30,14 +30,19 @@ router.put("/:id", autenticar, autorizar("admin"), async (req, res) => {
   }
 });
 
-// DELETE /api/etapas/:id
+// DELETE /api/etapas/:id — borrado suave. (campeonato_id, numero) es UNIQUE,
+// y numero es NOT NULL, así que no se puede simplemente vaciar al desactivar
+// (mismo bug de fondo que en pilotos/categorías: un registro desactivado
+// seguía ocupando su lugar para siempre). Se usa -id como número: es negativo
+// (nunca choca con un número real, que siempre es positivo) y único de por sí
+// porque id ya lo es, así que libera el número original sin tocar el esquema.
 router.delete("/:id", autenticar, autorizar("admin"), async (req, res) => {
   try {
     const [existe] = await db.query("SELECT id FROM etapas WHERE id = ? AND activo = 1 LIMIT 1", [req.params.id]);
     if (existe.length === 0) return res.status(404).json({ error: "Etapa no encontrada" });
     const [insc] = await db.query("SELECT COUNT(*) AS cnt FROM inscripciones WHERE etapa_id = ?", [req.params.id]);
     if (insc[0].cnt > 0) return res.status(409).json({ error: "No se puede eliminar: tiene inscripciones activas" });
-    await db.query("UPDATE etapas SET activo = 0 WHERE id = ?", [req.params.id]);
+    await db.query("UPDATE etapas SET activo = 0, numero = -id WHERE id = ?", [req.params.id]);
     res.json({ mensaje: "Etapa eliminada" });
   } catch {
     res.status(500).json({ error: "Error al eliminar etapa" });
