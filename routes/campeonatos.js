@@ -161,8 +161,13 @@ router.post("/:id/etapas", autenticar, autorizar("admin"), async (req, res) => {
     }
     let etapaNum = numero;
     if (!etapaNum) {
+      // AND activo=1 es necesario: una etapa borrada libera su número
+      // reasignándole -id (ver DELETE /api/etapas/:id), y sin este filtro ese
+      // número negativo se colaba en el MAX() y la siguiente etapa autonumerada
+      // podía terminar con numero=0 o negativo si esa era la única etapa
+      // borrada del campeonato.
       const [maxRow] = await db.query(
-        "SELECT COALESCE(MAX(numero),0)+1 AS sig FROM etapas WHERE campeonato_id = ?", [campId]
+        "SELECT COALESCE(MAX(numero),0)+1 AS sig FROM etapas WHERE campeonato_id = ? AND activo = 1", [campId]
       );
       etapaNum = maxRow[0].sig;
     }
