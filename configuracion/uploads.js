@@ -17,4 +17,12 @@ for (const dir of [UPLOADS_DIR, PILOTOS_DIR, PREPARADORES_DIR]) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
+// Visible en los logs de arranque para confirmar de un vistazo si las fotos
+// van a sobrevivir el próximo deploy (Volume montado) o no (carpeta efímera).
+console.log(
+  process.env.UPLOADS_DIR
+    ? `📁 Uploads: ${UPLOADS_DIR} (persistente — UPLOADS_DIR configurado)`
+    : `📁 Uploads: ${UPLOADS_DIR} (⚠️ efímero — se borra en cada deploy, falta UPLOADS_DIR)`
+);
+
 module.exports = { UPLOADS_DIR, PILOTOS_DIR, PREPARADORES_DIR };
