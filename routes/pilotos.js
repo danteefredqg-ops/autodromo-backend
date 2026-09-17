@@ -60,9 +60,13 @@ router.get("/", autenticar, async (req, res) => {
         p.numero_piloto, p.numero_piloto_anterior, p.email, p.telefono, p.nacionalidad,
         p.tipo_sangre, p.numero_licencia, p.estatus_licencia, p.anio_inicio_autodromo,
         p.fecha_vencimiento_licencia, p.foto_perfil, p.activo, p.creado_en,
-        (SELECT COUNT(*) FROM inscripciones WHERE piloto_id = p.id) AS total_campeonatos,
+        (SELECT COUNT(*) FROM inscripciones WHERE piloto_id = p.id) AS total_carreras,
         (SELECT cat.nombre FROM inscripciones i2 JOIN categorias cat ON cat.id = i2.categoria_id
-         WHERE i2.piloto_id = p.id ORDER BY i2.creado_en DESC LIMIT 1) AS ultima_categoria
+         WHERE i2.piloto_id = p.id ORDER BY i2.creado_en DESC LIMIT 1) AS ultima_categoria,
+        (SELECT MAX(e.fecha) FROM inscripciones i3 JOIN etapas e ON e.id = i3.etapa_id
+         WHERE i3.piloto_id = p.id) AS ultima_carrera_fecha,
+        (SELECT COUNT(*) FROM inscripciones i4 JOIN etapas e2 ON e2.id = i4.etapa_id
+         WHERE i4.piloto_id = p.id AND e2.fecha >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)) AS etapas_recientes
       FROM pilotos p WHERE p.activo = 1`;
     const params = [];
     if (estatus_licencia) { sql += " AND p.estatus_licencia = ?"; params.push(estatus_licencia); }
