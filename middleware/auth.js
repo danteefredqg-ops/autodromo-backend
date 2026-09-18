@@ -17,8 +17,13 @@ const loginLimit = rateLimit({
   message: { error: "Demasiados intentos. Intenta en 15 minutos." },
 });
 
+// 5/min era demasiado agresivo para un evento real: muchas personas
+// registrándose desde la misma WiFi del autódromo (o el staff ayudando desde
+// una sola tablet) comparten la misma IP pública y chocan contra el límite
+// entre ellas mismas, no por abuso. 20/min sigue frenando un bot de spam
+// pero da margen de sobra para una ventanilla o kiosco atendiendo gente real.
 const autoRegistroLimit = rateLimit({
-  windowMs: 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false,
+  windowMs: 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false,
   message: { error: "Demasiadas solicitudes. Espera un momento." },
 });
 
