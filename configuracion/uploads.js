@@ -12,8 +12,9 @@ const path = require("path");
 const UPLOADS_DIR      = process.env.UPLOADS_DIR || path.join(__dirname, "..", "uploads");
 const PILOTOS_DIR      = path.join(UPLOADS_DIR, "pilotos");
 const PREPARADORES_DIR = path.join(UPLOADS_DIR, "preparadores");
+const REGISTRO_DIR     = path.join(UPLOADS_DIR, "registro"); // imágenes que ve el piloto al inscribirse
 
-for (const dir of [UPLOADS_DIR, PILOTOS_DIR, PREPARADORES_DIR]) {
+for (const dir of [UPLOADS_DIR, PILOTOS_DIR, PREPARADORES_DIR, REGISTRO_DIR]) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
@@ -25,4 +26,4 @@ console.log(
     : `📁 Uploads: ${UPLOADS_DIR} (⚠️ efímero — se borra en cada deploy, falta UPLOADS_DIR)`
 );
 
-module.exports = { UPLOADS_DIR, PILOTOS_DIR, PREPARADORES_DIR };
+module.exports = { UPLOADS_DIR, PILOTOS_DIR, PREPARADORES_DIR, REGISTRO_DIR };

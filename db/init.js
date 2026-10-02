@@ -360,6 +360,23 @@ async function inicializarBD() {
     creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`);
 
+  // Imágenes que ve el piloto al inscribirse (promos, reglamento, mapa, etc.).
+  // etapa_id NULL = se muestra en todo el campeonato; con etapa_id, solo al
+  // elegir esa etapa. El archivo vive en UPLOADS_DIR/registro.
+  await db.query(`CREATE TABLE IF NOT EXISTS imagenes_registro (
+    id            INT AUTO_INCREMENT PRIMARY KEY,
+    campeonato_id INT          NOT NULL,
+    etapa_id      INT          NULL,
+    archivo       VARCHAR(300) NOT NULL,
+    titulo        VARCHAR(150) NULL,
+    orden         INT          NOT NULL DEFAULT 0,
+    activo        TINYINT(1)   NOT NULL DEFAULT 1,
+    creado_en     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_img_camp (campeonato_id, activo),
+    FOREIGN KEY (campeonato_id) REFERENCES campeonatos(id),
+    FOREIGN KEY (etapa_id)      REFERENCES etapas(id)
+  ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+
   // 6. Migración legada: campeonatos de la época sin etapas (inscripciones con
   // etapa_id NULL y ninguna etapa creada) reciben una "Etapa 1" y se les pasan
   // esas inscripciones. Antes esto corría para cualquier campeonato sin una

@@ -52,6 +52,8 @@ router.delete("/:id", autenticar, autorizar("admin"), async (req, res) => {
     const [insc] = await db.query("SELECT COUNT(*) AS cnt FROM inscripciones WHERE etapa_id = ?", [req.params.id]);
     if (insc[0].cnt > 0) return res.status(409).json({ error: "No se puede eliminar: tiene inscripciones activas" });
     await db.query("UPDATE etapas SET activo = 0, numero = -id WHERE id = ?", [req.params.id]);
+    // Sus imágenes de registro dejan de mostrarse (y de aparecer en el admin).
+    await db.query("UPDATE imagenes_registro SET activo = 0 WHERE etapa_id = ?", [req.params.id]);
     res.json({ mensaje: "Etapa eliminada" });
   } catch {
     res.status(500).json({ error: "Error al eliminar etapa" });

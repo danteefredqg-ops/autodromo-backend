@@ -59,6 +59,7 @@ function crearApp() {
   app.use("/api/usuarios",      r("usuarios"));
   app.use("/api/piloto",        r("piloto"));
   app.use("/api/resultados",    r("resultados"));
+  app.use("/api/imagenes-registro", r("imagenes"));
   return app;
 }
 

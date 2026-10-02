@@ -66,6 +66,7 @@ app.use("/api/usuarios",      require("./routes/usuarios"));
 app.use("/api/piloto",        require("./routes/piloto"));
 app.use("/api/resultados",    require("./routes/resultados"));
 app.use("/api/backup",        require("./routes/backup"));
+app.use("/api/imagenes-registro", require("./routes/imagenes"));
 
 // ─── 404 ──────────────────────────────────────────────────────────────────────
 app.use((req, res) => res.status(404).json({ error: "Ruta no encontrada" }));
