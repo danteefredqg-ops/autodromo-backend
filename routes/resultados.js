@@ -8,8 +8,8 @@ function puntosParaPosicion(pos, estatus) {
   return PUNTOS_POS[pos] ?? 0;
 }
 
-// POST /api/resultados
-router.post("/", autenticar, autorizar("admin", "inscripciones"), async (req, res) => {
+// POST /api/resultados — solo torre (y admin): capturar resultados es tarea de pista
+router.post("/", autenticar, autorizar("admin", "torre"), async (req, res) => {
   try {
     const { etapa_id, categoria_id, resultados } = req.body;
     if (!etapa_id || !categoria_id || !Array.isArray(resultados)) {

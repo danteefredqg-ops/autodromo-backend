@@ -30,7 +30,8 @@ router.get("/piloto/:pilotoId", autenticar, autorizar("admin", "inscripciones"),
          WHERE i.piloto_id = ? AND i.etapa_id = ? LIMIT 1`,
         [pilotoId, etapa_id]
       );
-      if (rows.length > 0) inscripcion = rows[0];
+      // El monto cobrado solo lo ve el admin (staff no ve cifras de caja).
+      if (rows.length > 0) { const { monto_pago, ...ins } = rows[0]; inscripcion = req.usuario.rol === "admin" ? rows[0] : ins; }
     }
     res.json({ piloto: p, inscripcion });
   } catch (err) {
@@ -44,7 +45,7 @@ router.get("/etapa/:etapaId", autenticar, autorizar("admin", "inscripciones"), a
   try {
     const [rows] = await db.query(
       `SELECT i.id AS inscripcion_id, i.numero_piloto, i.vehiculo, i.modelo_vehiculo, i.anio_vehiculo,
-              i.estatus, i.metodo_pago, i.monto_pago,
+              i.estatus, i.metodo_pago,
               p.id AS piloto_id, p.nombre_completo, p.apellido_paterno, p.apellido_materno, p.nombres,
               p.tipo_sangre, p.telefono, p.email, p.nacionalidad, p.fecha_nacimiento,
               p.ciudad, p.estado, p.contacto_emergencia, p.telefono_emergencia,

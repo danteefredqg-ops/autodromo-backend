@@ -113,7 +113,9 @@ router.get("/:id", autenticar, autorizar("admin", "inscripciones"), async (req, 
       "SELECT * FROM preparadores WHERE piloto_id = ? AND activo = 1 ORDER BY nombre_completo ASC",
       [req.params.id]
     );
-    res.json({ ...sinSecretos(pilotos[0]), inscripciones, preparadores });
+    // El monto cobrado solo lo ve el admin (staff no ve cifras de caja).
+    const insc = req.usuario.rol === "admin" ? inscripciones : inscripciones.map(({ monto_pago, ...i }) => i);
+    res.json({ ...sinSecretos(pilotos[0]), inscripciones: insc, preparadores });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Error al obtener piloto" });

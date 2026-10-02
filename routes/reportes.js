@@ -13,12 +13,16 @@ const JOIN_COSTO_SQL = "LEFT JOIN campeonato_categorias cc ON cc.campeonato_id =
 // válido (Intercambio sin costo) — solo un monto NULL cae al costo de lista.
 const montoCobrado = (r) => (r.monto_pago !== null && r.monto_pago !== undefined)
   ? parseFloat(r.monto_pago) : parseFloat(r.costo_inscripcion) || 0;
-// Un descalificado no se espera que pague (igual que no cuenta como pendiente).
-const montoEsperado = (r) => (r.estatus === "Descalificado" ? 0 : parseFloat(r.costo_inscripcion) || 0);
+// El dinero se cuenta por "hay un cobro registrado" (pagado_en), no por el
+// estatus actual: si torre descalifica a alguien que ya pagó, ese dinero sigue
+// en caja y el corte/arqueo debe seguir sumándolo.
+const tieneCobro = (r) => !!r.pagado_en || r.estatus === "Pagado";
+// Un descalificado sin cobro no se espera que pague (igual que no cuenta como pendiente).
+const montoEsperado = (r) => (r.estatus === "Descalificado" && !tieneCobro(r) ? 0 : parseFloat(r.costo_inscripcion) || 0);
 
-// GET /api/reportes/por-categoria — incluye montos/método de pago por piloto,
-// igual que corte-general: debe llevar la misma restricción de rol para que
-// torre (solo lectura de pista) no tenga acceso a cifras de caja por otra puerta.
+// GET /api/reportes/por-categoria — reporte de inscripciones. Staff lo ve,
+// pero sin cifras de dinero (montos, costos, totales cobrados/esperados): el
+// cliente pidió que solo el admin vea cuánto se junta. Torre no lo ve.
 router.get("/por-categoria", autenticar, autorizar("admin", "inscripciones"), async (req, res) => {
   try {
     const { campeonato_id, etapa_id, categoria_id, todos } = req.query;
@@ -62,9 +66,15 @@ router.get("/por-categoria", autenticar, autorizar("admin", "inscripciones"), as
       g.pilotos.push(r);
       g.total++;
       g.total_esperado += montoEsperado(r);
+      if (tieneCobro(r)) g.total_cobrado += montoCobrado(r);
       if (r.estatus === "Pagado") {
         g.pagados++;
-        g.total_cobrado += montoCobrado(r);
+      }
+    }
+    if (req.usuario.rol !== "admin") {
+      for (const g of Object.values(agrupado)) {
+        delete g.costo; delete g.total_esperado; delete g.total_cobrado;
+        g.pilotos = g.pilotos.map(({ monto_pago, costo_inscripcion, ...r }) => r);
       }
     }
     res.json({ agrupado, total: rows.length });
@@ -74,8 +84,9 @@ router.get("/por-categoria", autenticar, autorizar("admin", "inscripciones"), as
   }
 });
 
-// GET /api/reportes/corte-general
-router.get("/corte-general", autenticar, autorizar("admin", "inscripciones"), async (req, res) => {
+// GET /api/reportes/corte-general — corte de caja: solo admin (ni staff ni torre
+// ven cuánto se recaudó). También lo usa el precorte/arqueo de efectivo.
+router.get("/corte-general", autenticar, autorizar("admin"), async (req, res) => {
   try {
     const { campeonato_id, etapa_id, categoria_id, todos } = req.query;
     if (!campeonato_id && !etapa_id && !todos) return res.status(400).json({ error: "campeonato_id, etapa_id o todos=true requerido" });
@@ -123,10 +134,11 @@ router.get("/corte-general", autenticar, autorizar("admin", "inscripciones"), as
     const [inscripciones] = await db.query(sql, params);
     const pagados      = inscripciones.filter(r => r.estatus === "Pagado");
     const pendientes   = inscripciones.filter(r => r.estatus !== "Pagado" && r.estatus !== "Descalificado");
-    const efectivo     = pagados.filter(r => r.metodo_pago === "Efectivo");
-    const transferencia = pagados.filter(r => r.metodo_pago === "Transferencia");
-    const intercambio  = pagados.filter(r => r.metodo_pago === "Intercambio");
-    const ingresos     = pagados.reduce((s, r) => s + montoCobrado(r), 0);
+    const cobradas     = inscripciones.filter(tieneCobro);
+    const efectivo     = cobradas.filter(r => r.metodo_pago === "Efectivo");
+    const transferencia = cobradas.filter(r => r.metodo_pago === "Transferencia");
+    const intercambio  = cobradas.filter(r => r.metodo_pago === "Intercambio");
+    const ingresos     = cobradas.reduce((s, r) => s + montoCobrado(r), 0);
     const ingresosEfectivo = efectivo.reduce((s, r) => s + montoCobrado(r), 0);
     const esperado     = inscripciones.reduce((s, r) => s + montoEsperado(r), 0);
 

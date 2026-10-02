@@ -44,6 +44,19 @@ router.get("/", autenticar, async (req, res) => {
       );
       return { ...r, cambio_vehiculo: cambioVehiculo };
     });
+    // Torre (apoyo en pista) no ve cifras de caja, métodos de pago ni datos de
+    // contacto del piloto: no basta con ocultarlos en pantalla, tampoco deben
+    // viajar en el JSON.
+    if (req.usuario.rol === "torre") {
+      return res.json(conVehiculoOriginal.map(({
+        monto_pago, metodo_pago, pagado_por, costo_categoria, piloto_telefono, piloto_nacionalidad, ...r
+      }) => r));
+    }
+    // Staff cobra (necesita el costo de la categoría), pero no debe poder sumar
+    // cuánto se ha juntado: el monto cobrado por inscripción solo lo ve el admin.
+    if (req.usuario.rol !== "admin") {
+      return res.json(conVehiculoOriginal.map(({ monto_pago, ...r }) => r));
+    }
     res.json(conVehiculoOriginal);
   } catch (err) {
     console.error(err);
@@ -172,14 +185,29 @@ router.patch("/:id/vehiculo", autenticar, autorizar("admin", "inscripciones", "t
   }
 });
 
-// PATCH /api/inscripciones/:id/estatus
-router.patch("/:id/estatus", autenticar, autorizar("admin", "inscripciones"), async (req, res) => {
+// PATCH /api/inscripciones/:id/estatus — solo torre (y admin): es una decisión
+// de pista (p.ej. descalificar). Staff ya no cambia estatus; su forma de dejar
+// una inscripción en "Pagado" es registrar el cobro con /pagar.
+router.patch("/:id/estatus", autenticar, autorizar("admin", "torre"), async (req, res) => {
   try {
     const { estatus, notas } = req.body;
     const validos = ["Pendiente", "Pagado", "Descalificado"];
     if (!estatus || !validos.includes(estatus)) return res.status(400).json({ error: "Estatus inválido" });
-    await db.query("UPDATE inscripciones SET estatus=?, notas=? WHERE id=?", [estatus, notas || null, req.params.id]);
-    res.json({ mensaje: "Estatus actualizado" });
+    const [rows] = await db.query("SELECT pagado_en, notas FROM inscripciones WHERE id = ? LIMIT 1", [req.params.id]);
+    if (rows.length === 0) return res.status(404).json({ error: "Inscripción no encontrada" });
+    // "Pagado" solo se puede restaurar si de verdad hubo un cobro registrado:
+    // si no, esto serviría para marcar pagos sin pasar por caja.
+    if (estatus === "Pagado" && !rows[0].pagado_en) {
+      return res.status(409).json({ error: "Esta inscripción no tiene un pago registrado. El cobro se registra en ventanilla." });
+    }
+    // Y una inscripción ya cobrada no puede volver a "Pendiente": staff vería otra
+    // vez "Cobrar" y un segundo cobro sobrescribiría el primero en la caja.
+    if (estatus === "Pendiente" && rows[0].pagado_en) {
+      return res.status(409).json({ error: "Esta inscripción ya tiene un pago registrado; solo puede quedar como Pagado o Descalificado." });
+    }
+    await db.query("UPDATE inscripciones SET estatus=?, notas=? WHERE id=?",
+      [estatus, notas !== undefined ? (notas || null) : rows[0].notas, req.params.id]);
+    res.json({ mensaje: "Estatus actualizado", estatus });
   } catch {
     res.status(500).json({ error: "Error al actualizar estatus" });
   }

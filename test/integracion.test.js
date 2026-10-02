@@ -67,7 +67,7 @@ test("GET /reportes/corte-general usa el costo por categoría, filtra categoría
       ];
     }
   });
-  const r = await h.pedir("GET", "/reportes/corte-general?campeonato_id=1&categoria_id=9", { token: STAFF() });
+  const r = await h.pedir("GET", "/reportes/corte-general?campeonato_id=1&categoria_id=9", { token: ADMIN() });
   assert.equal(r.status, 200);
   const [q] = h.buscar(/FROM inscripciones i/);
   assert.match(q.sql, /COALESCE\(cc\.costo, cat\.costo_default, e\.costo, 0\)/);
@@ -241,4 +241,130 @@ test("inicializarBD sí migra un campeonato legado sin etapas con inscripciones 
   assert.equal(h.buscar(/INSERT INTO etapas/).length, 1);
   const [upd] = h.buscar(/UPDATE inscripciones SET etapa_id/);
   assert.deepEqual(upd.params, [500, 3]);
+});
+
+// ── Roles (hoja "ROLES DEL SISTEMA", octubre 2026) ────────────────────────────
+const TORRE = () => h.tokenSistema("torre");
+
+test("Roles: corte de caja solo admin (staff y torre 403)", async () => {
+  h.reiniciar();
+  assert.equal((await h.pedir("GET", "/reportes/corte-general?todos=true", { token: STAFF() })).status, 403);
+  assert.equal((await h.pedir("GET", "/reportes/corte-general?todos=true", { token: TORRE() })).status, 403);
+  assert.equal((await h.pedir("GET", "/reportes/corte-general?todos=true", { token: ADMIN() })).status, 200);
+});
+
+test("Roles: staff ve el reporte de inscripciones por categoría pero sin montos; torre no lo ve", async () => {
+  h.reiniciar((sql) => (/FROM inscripciones i/.test(sql)
+    ? [{ estatus: "Pagado", metodo_pago: "Efectivo", monto_pago: "2300.00", costo_inscripcion: "2300.00", categoria_nombre: "PONY 1" }]
+    : undefined));
+  const staff = await h.pedir("GET", "/reportes/por-categoria?etapa_id=1", { token: STAFF() });
+  assert.equal(staff.status, 200);
+  const g = staff.data.agrupado["PONY 1"];
+  assert.equal(g.pagados, 1);
+  assert.ok(!("total_cobrado" in g) && !("total_esperado" in g) && !("costo" in g));
+  assert.ok(!JSON.stringify(staff.data).includes("2300"), "staff no recibe ninguna cifra de dinero");
+  const admin = await h.pedir("GET", "/reportes/por-categoria?etapa_id=1", { token: ADMIN() });
+  assert.equal(admin.data.agrupado["PONY 1"].total_cobrado, 2300);
+  assert.equal((await h.pedir("GET", "/reportes/por-categoria?etapa_id=1", { token: TORRE() })).status, 403);
+});
+
+test("Roles: cambiar estatus solo torre y admin (staff 403)", async () => {
+  h.reiniciar((sql) => (/SELECT pagado_en, notas FROM inscripciones/.test(sql) ? [{ pagado_en: null, notas: null }] : undefined));
+  const body = { estatus: "Descalificado" };
+  assert.equal((await h.pedir("PATCH", "/inscripciones/4/estatus", { token: STAFF(), body })).status, 403);
+  assert.equal((await h.pedir("PATCH", "/inscripciones/4/estatus", { token: TORRE(), body })).status, 200);
+  assert.equal((await h.pedir("PATCH", "/inscripciones/4/estatus", { token: ADMIN(), body })).status, 200);
+});
+
+test("Roles: torre no puede marcar 'Pagado' una inscripción que nunca se cobró", async () => {
+  h.reiniciar((sql) => (/SELECT pagado_en, notas FROM inscripciones/.test(sql) ? [{ pagado_en: null, notas: null }] : undefined));
+  const r = await h.pedir("PATCH", "/inscripciones/4/estatus", { token: TORRE(), body: { estatus: "Pagado" } });
+  assert.equal(r.status, 409);
+  assert.equal(h.buscar(/UPDATE inscripciones SET estatus/).length, 0);
+  // Pero sí puede reactivar como Pagado a quien ya había pagado y fue descalificado.
+  h.reiniciar((sql) => (/SELECT pagado_en, notas FROM inscripciones/.test(sql) ? [{ pagado_en: "2026-10-01 10:00:00", notas: null }] : undefined));
+  assert.equal((await h.pedir("PATCH", "/inscripciones/4/estatus", { token: TORRE(), body: { estatus: "Pagado" } })).status, 200);
+});
+
+test("Roles: capturar resultados solo torre y admin (staff 403)", async () => {
+  h.reiniciar((sql) => (/FROM inscripciones\s+WHERE etapa_id/.test(sql) ? [{ piloto_id: 7 }] : undefined));
+  const body = { etapa_id: 1, categoria_id: 2, resultados: [{ piloto_id: 7, posicion: 1 }] };
+  assert.equal((await h.pedir("POST", "/resultados", { token: STAFF(), body })).status, 403);
+  assert.equal((await h.pedir("POST", "/resultados", { token: TORRE(), body })).status, 200);
+  assert.equal((await h.pedir("POST", "/resultados", { token: ADMIN(), body })).status, 200);
+});
+
+test("Roles: cobrar sigue siendo de staff; torre no puede marcar pagos", async () => {
+  h.reiniciar((sql) => (/FROM inscripciones i/.test(sql) ? [{ id: 4 }] : undefined));
+  const body = { metodo_pago: "Efectivo", monto_pago: 100 };
+  assert.equal((await h.pedir("PATCH", "/inscripciones/4/pagar", { token: TORRE(), body })).status, 403);
+  assert.equal((await h.pedir("PATCH", "/inscripciones/4/pagar", { token: STAFF(), body })).status, 200);
+});
+
+test("Roles: la lista de inscripciones no manda dinero ni contacto a torre, ni montos cobrados a staff", async () => {
+  const fila = {
+    id: 1, vehiculo: "Ford", vehiculo_original: "Ford", estatus: "Pagado", pagado_en: "2026-10-01",
+    monto_pago: "2300.00", metodo_pago: "Efectivo", pagado_por: "caja1", costo_categoria: "2300.00",
+    piloto_telefono: "8112345678", piloto_nacionalidad: "Mexicana",
+  };
+  h.reiniciar((sql) => (/FROM inscripciones i/.test(sql) ? [{ ...fila }] : undefined));
+  const [torre] = (await h.pedir("GET", "/inscripciones?etapa_id=1", { token: TORRE() })).data;
+  for (const campo of ["monto_pago", "metodo_pago", "pagado_por", "costo_categoria", "piloto_telefono", "piloto_nacionalidad"]) {
+    assert.ok(!(campo in torre), `torre no debe recibir ${campo}`);
+  }
+  assert.equal(torre.pagado_en, "2026-10-01", "torre necesita saber si hubo cobro para reactivar como Pagado");
+  const [staff] = (await h.pedir("GET", "/inscripciones?etapa_id=1", { token: STAFF() })).data;
+  assert.ok(!("monto_pago" in staff));
+  assert.equal(staff.costo_categoria, "2300.00", "staff necesita el costo para cobrar");
+  const [admin] = (await h.pedir("GET", "/inscripciones?etapa_id=1", { token: ADMIN() })).data;
+  assert.equal(admin.monto_pago, "2300.00");
+});
+
+test("Roles: detalle de piloto no manda el monto cobrado a staff", async () => {
+  h.reiniciar((sql) => {
+    if (/SELECT \* FROM pilotos/.test(sql)) return [{ id: 5, nombre_completo: "Juan" }];
+    if (/FROM inscripciones i/.test(sql)) return [{ id: 1, monto_pago: "2300.00" }];
+  });
+  const staff = await h.pedir("GET", "/pilotos/5", { token: STAFF() });
+  assert.ok(!("monto_pago" in staff.data.inscripciones[0]));
+  const admin = await h.pedir("GET", "/pilotos/5", { token: ADMIN() });
+  assert.equal(admin.data.inscripciones[0].monto_pago, "2300.00");
+});
+
+test("Roles: lo exclusivo de admin sigue cerrado para staff y torre", async () => {
+  h.reiniciar();
+  for (const token of [STAFF(), TORRE()]) {
+    assert.equal((await h.pedir("POST", "/campeonatos", { token, body: { nombre: "X" } })).status, 403);
+    assert.equal((await h.pedir("DELETE", "/pilotos/5", { token })).status, 403);
+    assert.equal((await h.pedir("PATCH", "/pilotos/5/reset-password", { token, body: { password: "123456" } })).status, 403);
+    assert.equal((await h.pedir("GET", "/usuarios", { token })).status, 403);
+  }
+  // Torre no registra pilotos ni inscribe.
+  assert.equal((await h.pedir("POST", "/pilotos", { token: TORRE(), body: { nombre_completo: "X" } })).status, 403);
+  assert.equal((await h.pedir("POST", "/inscripciones", { token: TORRE(), body: {} })).status, 403);
+});
+
+test("Roles: una inscripción ya cobrada no puede volver a 'Pendiente' (evita doble cobro)", async () => {
+  h.reiniciar((sql) => (/SELECT pagado_en, notas FROM inscripciones/.test(sql) ? [{ pagado_en: "2026-10-01 10:00:00", notas: null }] : undefined));
+  const r = await h.pedir("PATCH", "/inscripciones/4/estatus", { token: TORRE(), body: { estatus: "Pendiente" } });
+  assert.equal(r.status, 409);
+  assert.equal(h.buscar(/UPDATE inscripciones SET estatus/).length, 0);
+});
+
+test("Corte: el dinero de alguien descalificado después de pagar sigue contando en caja", async () => {
+  h.reiniciar((sql) => {
+    if (/FROM campeonatos WHERE id = \?/.test(sql)) return [{ id: 1, nombre: "C" }];
+    if (/FROM inscripciones i/.test(sql)) {
+      return [
+        { estatus: "Pagado", pagado_en: "2026-10-01", metodo_pago: "Efectivo", monto_pago: "1000.00", costo_inscripcion: "1000.00", categoria_nombre: "A" },
+        { estatus: "Descalificado", pagado_en: "2026-10-01", metodo_pago: "Efectivo", monto_pago: "1000.00", costo_inscripcion: "1000.00", categoria_nombre: "A" },
+        { estatus: "Descalificado", pagado_en: null, metodo_pago: null, monto_pago: null, costo_inscripcion: "1000.00", categoria_nombre: "A" },
+      ];
+    }
+  });
+  const r = await h.pedir("GET", "/reportes/corte-general?campeonato_id=1", { token: ADMIN() });
+  assert.equal(r.data.resumen.ingresos, 2000);
+  assert.equal(r.data.resumen.ingresosEfectivo, 2000, "el arqueo debe esperar ambos cobros en efectivo");
+  assert.equal(r.data.resumen.esperado, 2000, "el descalificado sin cobro no se espera");
+  assert.equal(r.data.resumen.pagados, 1);
 });
