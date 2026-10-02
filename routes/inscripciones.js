@@ -67,6 +67,11 @@ router.post("/", autenticar, autorizar("admin", "inscripciones"), async (req, re
     if (!etapa_id && !directCampId) {
       return res.status(400).json({ error: "Se requiere etapa_id o campeonato_id" });
     }
+    const [pil] = await db.query("SELECT numero_piloto FROM pilotos WHERE id = ? AND activo = 1 LIMIT 1", [piloto_id]);
+    if (pil.length === 0) return res.status(404).json({ error: "Piloto no encontrado" });
+    if (pil[0].numero_piloto && parseInt(numero_piloto) !== pil[0].numero_piloto) {
+      return res.status(409).json({ error: `El número de este piloto es el #${pil[0].numero_piloto}` });
+    }
     let campId = directCampId;
     let etId   = etapa_id || null;
     if (etapa_id) {
@@ -115,10 +120,19 @@ router.patch("/:id/pagar", autenticar, autorizar("admin", "inscripciones"), asyn
   try {
     const { metodo_pago, monto_pago } = req.body;
     const metodo = ["Efectivo", "Transferencia", "Intercambio"].includes(metodo_pago) ? metodo_pago : "Efectivo";
-    await db.query(
+    // Un monto de 0 es válido (p.ej. Intercambio sin costo). Con `monto_pago || null`
+    // el 0 se guardaba como NULL y el corte de caja lo contaba como si se hubiera
+    // cobrado el costo completo de la categoría.
+    let monto = null;
+    if (monto_pago !== undefined && monto_pago !== null && monto_pago !== "") {
+      monto = Number(monto_pago);
+      if (!Number.isFinite(monto) || monto < 0) return res.status(400).json({ error: "Monto inválido" });
+    }
+    const [upd] = await db.query(
       "UPDATE inscripciones SET estatus='Pagado', metodo_pago=?, monto_pago=?, pagado_en=NOW(), pagado_por=? WHERE id=?",
-      [metodo, monto_pago || null, req.usuario.username, req.params.id]
+      [metodo, monto, req.usuario.username, req.params.id]
     );
+    if (upd.affectedRows === 0) return res.status(404).json({ error: "Inscripción no encontrada" });
     const [rows] = await db.query(
       `SELECT i.*, p.nombre_completo AS piloto_nombre, cat.nombre AS categoria_nombre
        FROM inscripciones i
@@ -239,6 +253,16 @@ router.post("/auto-registro", autoRegistroLimit, async (req, res) => {
     if (email) {
       const [existentes] = await db.query("SELECT * FROM pilotos WHERE email = ? AND activo = 1 LIMIT 1", [email]);
       if (existentes.length > 0) piloto = existentes[0];
+    }
+
+    // Si el correo ya pertenece a un piloto con número, el número enviado debe
+    // ser el suyo. Antes bastaba con escribir el correo de otra persona (incluso
+    // en el modo "soy nuevo") para inscribirla a su nombre, y la inscripción se
+    // guardaba con cualquier número — incluso uno que pertenece a otro piloto.
+    if (piloto && piloto.numero_piloto && parseInt(numero_piloto) !== piloto.numero_piloto) {
+      return res.status(409).json({
+        error: "Ese correo ya está registrado con otro número de piloto. Usa tu número o inicia sesión en el portal.",
+      });
     }
 
     if (numero_piloto && (!piloto || !piloto.numero_piloto)) {

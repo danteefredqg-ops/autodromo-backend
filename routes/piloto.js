@@ -10,6 +10,7 @@ const { JWT_SECRET, loginLimit, forgotPasswordLimit, autenticarPiloto } = requir
 const { PILOTOS_DIR, PREPARADORES_DIR } = require("../configuracion/uploads");
 const { enviarCorreo, correoRecuperacion } = require("../configuracion/mailer");
 const { telefonoValido, limpiarTelefono, curpValido } = require("../utils/validadores");
+const { sinSecretos } = require("../utils/sanitizar");
 
 const uploadFoto = multer({
   storage: multer.diskStorage({
@@ -122,7 +123,7 @@ router.post("/login", loginLimit, async (req, res) => {
     const ok = await bcrypt.compare(password, piloto.password);
     if (!ok) return res.status(401).json({ error: "Email o contraseña incorrectos" });
     const token = jwt.sign({ id: piloto.id, numero: piloto.numero_piloto, tipo: "piloto" }, JWT_SECRET, { expiresIn: "7d" });
-    const { password: _, ...datos } = piloto;
+    const datos = sinSecretos(piloto);
     res.json({ token, piloto: datos });
   } catch { res.status(500).json({ error: "Error al iniciar sesión" }); }
 });
@@ -169,7 +170,7 @@ router.post("/login-google", loginLimit, async (req, res) => {
 
     const piloto = rows[0];
     const token = jwt.sign({ id: piloto.id, numero: piloto.numero_piloto, tipo: "piloto" }, JWT_SECRET, { expiresIn: "7d" });
-    const { password: _, ...datos } = piloto;
+    const datos = sinSecretos(piloto);
     res.json({ token, piloto: datos });
   } catch (err) {
     console.error(err);
@@ -205,7 +206,11 @@ router.post("/forgot-password", forgotPasswordLimit, async (req, res) => {
       [tokenHash, expira, piloto.id]
     );
 
-    const link = `${process.env.FRONTEND_URL}/Login/restablecer.html?token=${token}`;
+    // FRONTEND_URL admite varios orígenes separados por coma (ver CORS en
+    // server.js): el enlace usa solo el primero, sin "/" final — si no, el correo
+    // llevaba "https://a.com,https://b.com/Login/..." y el botón no abría nada.
+    const frontendBase = (process.env.FRONTEND_URL || "").split(",")[0].trim().replace(/\/$/, "");
+    const link = `${frontendBase}/Login/restablecer.html?token=${token}`;
     try {
       await enviarCorreo({
         to: emailLimpio,
@@ -258,7 +263,7 @@ router.get("/mi-perfil", autenticarPiloto, async (req, res) => {
   try {
     const [rows] = await db.query("SELECT * FROM pilotos WHERE id = ? AND activo = 1 LIMIT 1", [req.piloto.id]);
     if (rows.length === 0) return res.status(404).json({ error: "Piloto no encontrado" });
-    const { password: _, ...datos } = rows[0];
+    const datos = sinSecretos(rows[0]);
     res.json(datos);
   } catch { res.status(500).json({ error: "Error al obtener perfil" }); }
 });
@@ -302,7 +307,11 @@ router.patch("/mi-perfil", autenticarPiloto, async (req, res) => {
       const valorFinal = (k === "telefono" || k === "telefono_emergencia") ? limpiarTelefono(v) : v;
       sets.push(`\`${k}\` = ?`); vals.push(valorFinal || null);
     }
-    if (req.body.nueva_password && req.body.nueva_password.length >= 6) {
+    if (req.body.nueva_password && req.body.nueva_password.length < 6) {
+      // Antes se ignoraba en silencio y el piloto creía haber cambiado su contraseña.
+      return res.status(400).json({ error: "La nueva contraseña debe tener al menos 6 caracteres" });
+    }
+    if (req.body.nueva_password) {
       sets.push("password = ?");
       vals.push(await bcrypt.hash(req.body.nueva_password, 10));
     }
@@ -310,7 +319,7 @@ router.patch("/mi-perfil", autenticarPiloto, async (req, res) => {
     vals.push(req.piloto.id);
     await db.query(`UPDATE pilotos SET ${sets.join(", ")} WHERE id = ?`, vals);
     const [updated] = await db.query("SELECT * FROM pilotos WHERE id = ? LIMIT 1", [req.piloto.id]);
-    const { password: _, ...datos } = updated[0];
+    const datos = sinSecretos(updated[0]);
     res.json(datos);
   } catch (err) {
     console.error(err);

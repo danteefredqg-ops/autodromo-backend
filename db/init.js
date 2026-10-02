@@ -360,30 +360,33 @@ async function inicializarBD() {
     creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`);
 
-  // 6. Etapa 1 para campeonatos sin etapas
+  // 6. Migración legada: campeonatos de la época sin etapas (inscripciones con
+  // etapa_id NULL y ninguna etapa creada) reciben una "Etapa 1" y se les pasan
+  // esas inscripciones. Antes esto corría para cualquier campeonato sin una
+  // etapa numero=1 — en cada deploy resucitaba la Etapa 1 que el admin hubiera
+  // borrado (o le inventaba una con la fecha de hoy a un campeonato recién
+  // creado) y movía ahí las inscripciones a nivel campeonato.
   if (await tablaExiste("etapas")) {
-    const [camps] = await db.query("SELECT * FROM campeonatos WHERE activo = 1");
+    const [camps] = await db.query(
+      `SELECT c.* FROM campeonatos c
+       WHERE c.activo = 1
+         AND NOT EXISTS (SELECT 1 FROM etapas e WHERE e.campeonato_id = c.id)
+         AND EXISTS (SELECT 1 FROM inscripciones i WHERE i.campeonato_id = c.id AND i.etapa_id IS NULL)`
+    );
     for (const camp of camps) {
-      const [existeEtapa] = await db.query(
-        "SELECT id FROM etapas WHERE campeonato_id = ? AND numero = 1 LIMIT 1", [camp.id]
+      const fecha = camp.fecha
+        ? (typeof camp.fecha === "string" ? camp.fecha : camp.fecha.toISOString().split("T")[0])
+        : new Date().toISOString().split("T")[0];
+      const [r] = await db.query(
+        "INSERT INTO etapas (campeonato_id, numero, nombre, fecha, ubicacion) VALUES (?,?,?,?,?)",
+        [camp.id, 1, "Etapa 1", fecha, camp.ubicacion || "Autódromo Monterrey"]
       );
-      if (existeEtapa.length === 0) {
-        const fecha = camp.fecha
-          ? (typeof camp.fecha === "string" ? camp.fecha : camp.fecha.toISOString().split("T")[0])
-          : new Date().toISOString().split("T")[0];
-        await db.query(
-          "INSERT INTO etapas (campeonato_id, numero, nombre, fecha, ubicacion) VALUES (?,?,?,?,?)",
-          [camp.id, 1, "Etapa 1", fecha, camp.ubicacion || "Autódromo Monterrey"]
-        );
-        console.log(`  + Etapa 1 creada para campeonato id=${camp.id}`);
-      }
+      await db.query(
+        "UPDATE inscripciones SET etapa_id = ? WHERE campeonato_id = ? AND etapa_id IS NULL",
+        [r.insertId, camp.id]
+      );
+      console.log(`  + Etapa 1 creada para campeonato id=${camp.id} (migración legada)`);
     }
-    await db.query(`
-      UPDATE inscripciones i
-      JOIN etapas e ON e.campeonato_id = i.campeonato_id AND e.numero = 1
-      SET i.etapa_id = e.id
-      WHERE i.etapa_id IS NULL AND i.campeonato_id IS NOT NULL
-    `);
     try { await db.query("ALTER TABLE inscripciones ADD CONSTRAINT fk_insc_etapa FOREIGN KEY (etapa_id) REFERENCES etapas(id)"); } catch {}
   }
 

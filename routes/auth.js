@@ -3,6 +3,7 @@ const bcrypt  = require("bcryptjs");
 const jwt     = require("jsonwebtoken");
 const db      = require("../configuracion/db");
 const { JWT_SECRET, loginLimit, autenticar } = require("../middleware/auth");
+const { sinSecretos } = require("../utils/sanitizar");
 
 // POST /api/auth/login
 router.post("/login", loginLimit, async (req, res) => {
@@ -48,7 +49,7 @@ router.post("/login-unico", loginLimit, async (req, res) => {
         pilotoSinAcceso = true;
       } else if (await bcrypt.compare(password, piloto.password)) {
         const token = jwt.sign({ id: piloto.id, numero: piloto.numero_piloto, tipo: "piloto" }, JWT_SECRET, { expiresIn: "7d" });
-        const { password: _, ...datos } = piloto;
+        const datos = sinSecretos(piloto);
         return res.json({ tipo: "piloto", token, piloto: datos });
       }
     }

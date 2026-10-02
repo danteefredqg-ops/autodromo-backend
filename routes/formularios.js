@@ -1,6 +1,7 @@
 const router = require("express").Router();
 const db     = require("../configuracion/db");
 const { autenticar, autorizar } = require("../middleware/auth");
+const { sinSecretos } = require("../utils/sanitizar");
 
 // GET /api/formularios/piloto/:pilotoId — admin/inscripciones (datos sensibles: sangre, CURP, alergias, etc.)
 router.get("/piloto/:pilotoId", autenticar, autorizar("admin", "inscripciones"), async (req, res) => {
@@ -9,7 +10,7 @@ router.get("/piloto/:pilotoId", autenticar, autorizar("admin", "inscripciones"),
     const { etapa_id } = req.query;
     const [pilotos] = await db.query("SELECT * FROM pilotos WHERE id = ? AND activo = 1 LIMIT 1", [pilotoId]);
     if (pilotos.length === 0) return res.status(404).json({ error: "Piloto no encontrado" });
-    const p = pilotos[0];
+    const p = sinSecretos(pilotos[0]);
     const [preparadores] = await db.query(
       "SELECT * FROM preparadores WHERE piloto_id = ? AND activo = 1 ORDER BY nombre_completo ASC",
       [pilotoId]

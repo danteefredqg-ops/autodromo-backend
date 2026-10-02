@@ -7,8 +7,11 @@ router.get("/estado", async (req, res) => {
   try {
     const { piloto_id, anio } = req.query;
     if (!piloto_id || !anio) return res.status(400).json({ error: "piloto_id y anio requeridos" });
+    // Ruta pública: solo se expone si está firmado y cuándo. Antes devolvía la
+    // fila completa, incluida ip_firma — cualquiera podía recorrer piloto_id
+    // y sacar la IP desde la que firmó cada piloto.
     const [rows] = await db.query(
-      "SELECT * FROM contratos_anuales WHERE piloto_id = ? AND anio = ? AND activo = 1 LIMIT 1",
+      "SELECT anio, fecha_firma FROM contratos_anuales WHERE piloto_id = ? AND anio = ? AND activo = 1 LIMIT 1",
       [piloto_id, anio]
     );
     res.json({ firmado: rows.length > 0, contrato: rows[0] || null });

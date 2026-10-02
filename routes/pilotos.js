@@ -6,6 +6,7 @@ const db     = require("../configuracion/db");
 const { autenticar, autorizar, autoRegistroLimit } = require("../middleware/auth");
 const { PILOTOS_DIR } = require("../configuracion/uploads");
 const { telefonoValido, limpiarTelefono, curpValido } = require("../utils/validadores");
+const { sinSecretos } = require("../utils/sanitizar");
 
 const uploadFoto = multer({
   storage: multer.diskStorage({
@@ -112,7 +113,7 @@ router.get("/:id", autenticar, autorizar("admin", "inscripciones"), async (req, 
       "SELECT * FROM preparadores WHERE piloto_id = ? AND activo = 1 ORDER BY nombre_completo ASC",
       [req.params.id]
     );
-    res.json({ ...pilotos[0], inscripciones, preparadores });
+    res.json({ ...sinSecretos(pilotos[0]), inscripciones, preparadores });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Error al obtener piloto" });
@@ -150,7 +151,7 @@ router.post("/", autenticar, autorizar("admin", "inscripciones"), async (req, re
       ]
     );
     const [nuevo] = await db.query("SELECT * FROM pilotos WHERE id = ? LIMIT 1", [result.insertId]);
-    res.status(201).json(nuevo[0]);
+    res.status(201).json(sinSecretos(nuevo[0]));
   } catch (err) {
     if (err.code === "ER_DUP_ENTRY") return res.status(409).json({ error: "Email, número de piloto o licencia ya registrado" });
     console.error(err);
@@ -172,6 +173,15 @@ router.put("/:id", autenticar, autorizar("admin", "inscripciones"), async (req, 
     if (!nombre_completo) return res.status(400).json({ error: "Nombre requerido" });
     if (!telefonoValido(telefono)) return res.status(400).json({ error: "El teléfono debe tener 10 dígitos" });
     if (!telefonoValido(telefono_emergencia)) return res.status(400).json({ error: "El teléfono de emergencia debe tener 10 dígitos" });
+    const [actuales] = await db.query(
+      "SELECT apellido_paterno, apellido_materno, nombres FROM pilotos WHERE id = ? LIMIT 1", [req.params.id]
+    );
+    if (actuales.length === 0) return res.status(404).json({ error: "Piloto no encontrado" });
+    // El modal de edición del dashboard solo manda nombre_completo: si un
+    // campo de nombre separado no viene en el body se conserva el actual — antes
+    // se guardaba NULL y editar cualquier dato (ej. el teléfono) borraba los
+    // apellidos/nombres que usa el PDF FEMADAC.
+    const conservar = (campo, valor) => (valor === undefined ? actuales[0][campo] : (valor || null));
     await db.query(
       `UPDATE pilotos SET
         apellido_paterno=?, apellido_materno=?, nombres=?, numero_piloto=?,
@@ -181,7 +191,8 @@ router.put("/:id", autenticar, autorizar("admin", "inscripciones"), async (req, 
         contacto_emergencia=?, telefono_emergencia=?, notas=?, fecha_vencimiento_licencia=?
        WHERE id=?`,
       [
-        apellido_paterno || null, apellido_materno || null, nombres || null, numero_piloto || null,
+        conservar("apellido_paterno", apellido_paterno), conservar("apellido_materno", apellido_materno),
+        conservar("nombres", nombres), numero_piloto || null,
         nombre_completo, limpiarTelefono(telefono) || null, email || null, tipo_sangre || null,
         direccion || null, ciudad || null, estado || null, nacionalidad || "Mexicana",
         estatus_licencia || "Vigente", numero_licencia || null, fecha_nacimiento || null,
@@ -191,7 +202,7 @@ router.put("/:id", autenticar, autorizar("admin", "inscripciones"), async (req, 
       ]
     );
     const [rows] = await db.query("SELECT * FROM pilotos WHERE id = ? LIMIT 1", [req.params.id]);
-    res.json(rows[0]);
+    res.json(sinSecretos(rows[0]));
   } catch (err) {
     if (err.code === "ER_DUP_ENTRY") return res.status(409).json({ error: "Datos duplicados" });
     res.status(500).json({ error: "Error al actualizar piloto" });
@@ -321,7 +332,7 @@ router.patch("/:id/datos-formulario", autenticar, autorizar("admin", "inscripcio
        anio_licencia_anterior||null, anio_inicio_autodromo||null, req.params.id]
     );
     const [rows] = await db.query("SELECT * FROM pilotos WHERE id = ? LIMIT 1", [req.params.id]);
-    res.json(rows[0]);
+    res.json(sinSecretos(rows[0]));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Error al actualizar datos del piloto" });

@@ -11,10 +11,19 @@ router.put("/:id", autenticar, autorizar("admin"), async (req, res) => {
     if (fecha_apertura_inscripcion && fecha_cierre_inscripcion && fecha_apertura_inscripcion > fecha_cierre_inscripcion) {
       return res.status(400).json({ error: "La apertura de inscripciones no puede ser después del cierre" });
     }
+    const num = parseInt(numero);
+    if (!Number.isInteger(num) || num < 1) return res.status(400).json({ error: "El número de etapa es obligatorio" });
+    const [existe] = await db.query("SELECT id FROM etapas WHERE id = ? AND activo = 1 LIMIT 1", [req.params.id]);
+    if (existe.length === 0) return res.status(404).json({ error: "Etapa no encontrada" });
+    // nombre es NOT NULL: el modal manda null si se deja en blanco (igual que al
+    // crear, donde se autogenera "Etapa N") y antes eso tronaba con un 500.
+    // costo ya no se captura en el modal (el costo va por categoría): si no
+    // viene en el body se conserva, en vez de borrarlo en cada edición.
     await db.query(
-      `UPDATE etapas SET numero=?,nombre=?,fecha=?,ubicacion=?,descripcion=?,costo=?,
+      `UPDATE etapas SET numero=?,nombre=?,fecha=?,ubicacion=?,descripcion=?,costo=IF(?,?,costo),
         fecha_apertura_inscripcion=?,fecha_cierre_inscripcion=? WHERE id=?`,
-      [numero, nombre, fecha, ubicacion || "Autódromo Monterrey", descripcion || null, costo || null,
+      [num, (nombre && String(nombre).trim()) || `Etapa ${num}`, fecha, ubicacion || "Autódromo Monterrey",
+       descripcion || null, costo !== undefined, costo || null,
        fecha_apertura_inscripcion || null, fecha_cierre_inscripcion || null, req.params.id]
     );
     const [rows] = await db.query(
