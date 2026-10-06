@@ -2,6 +2,7 @@ const router = require("express").Router();
 const db     = require("../configuracion/db");
 const { autenticar, autorizar, autoRegistroLimit } = require("../middleware/auth");
 const { telefonoValido, limpiarTelefono, vehiculoValido } = require("../utils/validadores");
+const { validarReglasCategorias } = require("../utils/reglasCategorias");
 
 // GET /api/inscripciones
 router.get("/", autenticar, async (req, res) => {
@@ -68,10 +69,17 @@ router.get("/", autenticar, async (req, res) => {
 router.post("/", autenticar, autorizar("admin", "inscripciones"), async (req, res) => {
   try {
     const {
-      piloto_id, etapa_id, campeonato_id: directCampId, categoria_id, numero_piloto,
+      piloto_id, etapa_id, campeonato_id: directCampId, categoria_id, categoria_ids, numero_piloto,
       vehiculo, modelo_vehiculo, anio_vehiculo, color_vehiculo, apodo_vehiculo,
     } = req.body;
-    if (!piloto_id || !categoria_id || !numero_piloto || !vehiculo) {
+    // Igual que el auto-registro: varias categorías de la misma etapa en un solo
+    // envío (categoria_ids), o una sola (categoria_id, como antes).
+    const categoriaIds = [...new Set(
+      (Array.isArray(categoria_ids) ? categoria_ids : (categoria_id != null ? [categoria_id] : []))
+        .map(id => parseInt(id)).filter(id => Number.isInteger(id))
+    )];
+    const numero = parseInt(numero_piloto);
+    if (!piloto_id || !categoriaIds.length || !(numero > 0) || !vehiculo) {
       return res.status(400).json({ error: "Campos obligatorios incompletos" });
     }
     if (!vehiculoValido(vehiculo)) {
@@ -80,49 +88,90 @@ router.post("/", autenticar, autorizar("admin", "inscripciones"), async (req, re
     if (!etapa_id && !directCampId) {
       return res.status(400).json({ error: "Se requiere etapa_id o campeonato_id" });
     }
-    const [pil] = await db.query("SELECT numero_piloto FROM pilotos WHERE id = ? AND activo = 1 LIMIT 1", [piloto_id]);
+    const [pil] = await db.query(
+      "SELECT numero_piloto, fecha_nacimiento FROM pilotos WHERE id = ? AND activo = 1 LIMIT 1", [piloto_id]
+    );
     if (pil.length === 0) return res.status(404).json({ error: "Piloto no encontrado" });
-    if (pil[0].numero_piloto && parseInt(numero_piloto) !== pil[0].numero_piloto) {
+    if (pil[0].numero_piloto && numero !== pil[0].numero_piloto) {
       return res.status(409).json({ error: `El número de este piloto es el #${pil[0].numero_piloto}` });
+    }
+    // Piloto sin número todavía: el número elegido no puede ser de otro piloto.
+    // Antes no se revisaba y se podía inscribir a alguien con un número ajeno.
+    if (!pil[0].numero_piloto) {
+      const [usado] = await db.query("SELECT id FROM pilotos WHERE numero_piloto = ? AND id <> ? LIMIT 1", [numero, piloto_id]);
+      if (usado.length > 0) return res.status(409).json({ error: `El número ${numero} ya está asignado a otro piloto` });
     }
     let campId = directCampId;
     let etId   = etapa_id || null;
+    let fechaCarrera = null;
     if (etapa_id) {
-      const [etRow] = await db.query("SELECT campeonato_id FROM etapas WHERE id = ? AND activo = 1 LIMIT 1", [etapa_id]);
+      const [etRow] = await db.query("SELECT campeonato_id, fecha FROM etapas WHERE id = ? AND activo = 1 LIMIT 1", [etapa_id]);
       if (etRow.length === 0) return res.status(404).json({ error: "Etapa no encontrada" });
       campId = etRow[0].campeonato_id;
+      fechaCarrera = etRow[0].fecha;
     }
-    if (etId) {
-      const [dup] = await db.query(
-        "SELECT id FROM inscripciones WHERE piloto_id = ? AND etapa_id = ? AND categoria_id = ? LIMIT 1",
-        [piloto_id, etId, categoria_id]
+
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.query("SELECT id FROM pilotos WHERE id = ? FOR UPDATE", [piloto_id]);
+      const errorRegla = await validarReglasCategorias(conn, {
+        pilotoId: piloto_id, fechaNacimiento: pil[0].fecha_nacimiento, categoriaIds,
+        etapaId: etId, campId, fechaCarrera,
+      });
+      if (errorRegla) { await conn.rollback(); return res.status(409).json({ error: errorRegla }); }
+      // Se le asigna el número al piloto (queda suyo para siempre, como en el auto-registro).
+      if (!pil[0].numero_piloto) {
+        await conn.query("UPDATE pilotos SET numero_piloto = ? WHERE id = ? AND numero_piloto IS NULL", [numero, piloto_id]);
+      }
+
+      const creadas = [];
+      for (const catId of categoriaIds) {
+        const [dup] = etId
+          ? await conn.query("SELECT id FROM inscripciones WHERE piloto_id = ? AND etapa_id = ? AND categoria_id = ? LIMIT 1", [piloto_id, etId, catId])
+          : await conn.query("SELECT id FROM inscripciones WHERE piloto_id = ? AND campeonato_id = ? AND categoria_id = ? AND etapa_id IS NULL LIMIT 1", [piloto_id, campId, catId]);
+        if (dup.length > 0) continue;
+        const [result] = await conn.query(
+          `INSERT INTO inscripciones
+            (piloto_id, campeonato_id, etapa_id, categoria_id, numero_piloto, vehiculo,
+             modelo_vehiculo, anio_vehiculo, color_vehiculo, apodo_vehiculo)
+           VALUES (?,?,?,?,?,?,?,?,?,?)`,
+          [piloto_id, campId, etId, catId, numero, vehiculo,
+           modelo_vehiculo || null, anio_vehiculo || null, color_vehiculo || null, apodo_vehiculo || null]
+        );
+        creadas.push(result.insertId);
+      }
+      if (creadas.length === 0) {
+        await conn.rollback();
+        return res.status(409).json({ error: "Este piloto ya está inscrito en esa(s) categoría(s) para esta etapa" });
+      }
+      const [nuevas] = await conn.query(
+        `SELECT i.*, p.nombre_completo AS piloto_nombre, p.tipo_sangre,
+                cat.nombre AS categoria_nombre, cat.color AS categoria_color,
+                camp.nombre AS campeonato_nombre,
+                e.nombre AS etapa_nombre, e.numero AS etapa_numero
+         FROM inscripciones i
+         JOIN pilotos   p    ON p.id    = i.piloto_id
+         JOIN categorias cat  ON cat.id  = i.categoria_id
+         JOIN campeonatos camp ON camp.id = i.campeonato_id
+         LEFT JOIN etapas e   ON e.id    = i.etapa_id
+         WHERE i.id IN (?) ORDER BY i.id ASC`,
+        [creadas]
       );
-      if (dup.length > 0) return res.status(409).json({ error: "Este piloto ya está inscrito en esta categoría para esta etapa" });
+      await conn.commit();
+      // Los campos de la primera inscripción al nivel raíz, como antes (retrocompatible).
+      res.status(201).json({ ...nuevas[0], inscripciones: nuevas, omitidas: categoriaIds.length - creadas.length });
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
     }
-    const [result] = await db.query(
-      `INSERT INTO inscripciones
-        (piloto_id, campeonato_id, etapa_id, categoria_id, numero_piloto, vehiculo,
-         modelo_vehiculo, anio_vehiculo, color_vehiculo, apodo_vehiculo)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`,
-      [piloto_id, campId, etId, categoria_id, numero_piloto, vehiculo,
-       modelo_vehiculo || null, anio_vehiculo || null, color_vehiculo || null, apodo_vehiculo || null]
-    );
-    const [nueva] = await db.query(
-      `SELECT i.*, p.nombre_completo AS piloto_nombre, p.tipo_sangre,
-              cat.nombre AS categoria_nombre, cat.color AS categoria_color,
-              camp.nombre AS campeonato_nombre,
-              e.nombre AS etapa_nombre, e.numero AS etapa_numero
-       FROM inscripciones i
-       JOIN pilotos   p    ON p.id    = i.piloto_id
-       JOIN categorias cat  ON cat.id  = i.categoria_id
-       JOIN campeonatos camp ON camp.id = i.campeonato_id
-       LEFT JOIN etapas e   ON e.id    = i.etapa_id
-       WHERE i.id = ? LIMIT 1`,
-      [result.insertId]
-    );
-    res.status(201).json(nueva[0]);
   } catch (err) {
-    if (err.code === "ER_DUP_ENTRY") return res.status(409).json({ error: "El piloto ya está inscrito con esa combinación" });
+    if (err.code === "ER_DUP_ENTRY") {
+      if (/numero_piloto/.test(err.sqlMessage || "")) return res.status(409).json({ error: "Ese número de piloto ya está asignado a otro piloto" });
+      return res.status(409).json({ error: "El piloto ya está inscrito con esa combinación" });
+    }
     console.error(err);
     res.status(500).json({ error: "Error al inscribir piloto" });
   }
@@ -255,13 +304,15 @@ router.post("/auto-registro", autoRegistroLimit, async (req, res) => {
 
     let campId = directCampId;
     let etId   = etapa_id || null;
+    let fechaCarrera = null;
     if (etapa_id) {
       const [etRow] = await db.query(
-        "SELECT campeonato_id, fecha_apertura_inscripcion, fecha_cierre_inscripcion FROM etapas WHERE id = ? AND activo = 1 LIMIT 1",
+        "SELECT campeonato_id, fecha, fecha_apertura_inscripcion, fecha_cierre_inscripcion FROM etapas WHERE id = ? AND activo = 1 LIMIT 1",
         [etapa_id]
       );
       if (etRow.length === 0) return res.status(404).json({ error: "Etapa no encontrada" });
       campId = etRow[0].campeonato_id;
+      fechaCarrera = etRow[0].fecha;
       // No usar CURDATE(): el servidor de MySQL puede correr en UTC y desfasar
       // la fecha varias horas respecto a Monterrey (UTC-6 fijo, sin horario de verano).
       const hoyMx = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -291,6 +342,21 @@ router.post("/auto-registro", autoRegistroLimit, async (req, res) => {
       return res.status(409).json({
         error: "Ese correo ya está registrado con otro número de piloto. Usa tu número o inicia sesión en el portal.",
       });
+    }
+
+    // Reglas por categoría (edad, categoría única). Se revisan ANTES de crear la
+    // cuenta de un piloto nuevo o asignarle número, para no dejar nada a medias
+    // si se rechaza; se vuelven a revisar dentro de la transacción (abajo), que
+    // es la que cuenta si llegan dos envíos al mismo tiempo.
+    const fechaNacimiento = (piloto && piloto.fecha_nacimiento) || fecha_nacimiento || null;
+    const errorReglaPrevio = await validarReglasCategorias(db, {
+      pilotoId: piloto ? piloto.id : 0, fechaNacimiento, categoriaIds, etapaId: etId, campId, fechaCarrera,
+    });
+    if (errorReglaPrevio) return res.status(409).json({ error: errorReglaPrevio });
+    // Piloto existente sin fecha de nacimiento que la mandó en el formulario: se guarda.
+    if (piloto && !piloto.fecha_nacimiento && fecha_nacimiento) {
+      await db.query("UPDATE pilotos SET fecha_nacimiento = ? WHERE id = ? AND fecha_nacimiento IS NULL", [fecha_nacimiento, piloto.id]);
+      piloto.fecha_nacimiento = fecha_nacimiento;
     }
 
     if (numero_piloto && (!piloto || !piloto.numero_piloto)) {
@@ -392,6 +458,10 @@ router.post("/auto-registro", autoRegistroLimit, async (req, res) => {
     try {
       await conn.beginTransaction();
       await conn.query("SELECT id FROM pilotos WHERE id = ? FOR UPDATE", [piloto_id]);
+      const errorRegla = await validarReglasCategorias(conn, {
+        pilotoId: piloto_id, fechaNacimiento: piloto.fecha_nacimiento, categoriaIds, etapaId: etId, campId, fechaCarrera,
+      });
+      if (errorRegla) { await conn.rollback(); return res.status(409).json({ error: errorRegla }); }
 
       const creadas = [];
       const duplicadas = [];

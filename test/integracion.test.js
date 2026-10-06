@@ -119,7 +119,7 @@ test("PATCH /inscripciones/:id/pagar rechaza montos negativos y da 404 si no exi
 // ── Bug 8 ─────────────────────────────────────────────────────────────────────
 test("auto-registro con el correo de otro piloto y otro número se rechaza sin inscribir", async () => {
   h.reiniciar((sql) => {
-    if (/SELECT campeonato_id, fecha_apertura_inscripcion/.test(sql)) {
+    if (/SELECT campeonato_id, fecha, fecha_apertura_inscripcion/.test(sql)) {
       return [{ campeonato_id: 1, fecha_apertura_inscripcion: null, fecha_cierre_inscripcion: null }];
     }
     if (/SELECT \* FROM pilotos WHERE email = \?/.test(sql)) return [{ id: 10, numero_piloto: 23, email: "ajeno@correo.com" }];
@@ -136,7 +136,7 @@ test("auto-registro con el correo de otro piloto y otro número se rechaza sin i
 
 test("auto-registro del propio piloto (correo + su número) sí inscribe", async () => {
   h.reiniciar((sql) => {
-    if (/SELECT campeonato_id, fecha_apertura_inscripcion/.test(sql)) {
+    if (/SELECT campeonato_id, fecha, fecha_apertura_inscripcion/.test(sql)) {
       return [{ campeonato_id: 1, fecha_apertura_inscripcion: null, fecha_cierre_inscripcion: null }];
     }
     if (/SELECT \* FROM pilotos WHERE email = \?/.test(sql)) return [{ id: 10, numero_piloto: 23 }];
@@ -151,7 +151,7 @@ test("auto-registro del propio piloto (correo + su número) sí inscribe", async
 });
 
 test("POST /inscripciones (staff) no acepta un número distinto al del piloto", async () => {
-  h.reiniciar((sql) => (/SELECT numero_piloto FROM pilotos/.test(sql) ? [{ numero_piloto: 23 }] : undefined));
+  h.reiniciar((sql) => (/SELECT numero_piloto, fecha_nacimiento FROM pilotos/.test(sql) ? [{ numero_piloto: 23 }] : undefined));
   const r = await h.pedir("POST", "/inscripciones", {
     token: STAFF(), body: { piloto_id: 10, etapa_id: 1, categoria_id: 2, numero_piloto: 5, vehiculo: "Ford" },
   });

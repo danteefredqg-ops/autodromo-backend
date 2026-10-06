@@ -228,6 +228,17 @@ async function inicializarBD() {
   await addColIfMissing("pilotos", "foto_perfil",           "VARCHAR(300) NULL");
   await addColIfMissing("campeonato_categorias", "costo",   "DECIMAL(10,2) NULL");
   await addColIfMissing("categorias", "costo_default",      "DECIMAL(10,2) NULL");
+  // Reglas por categoría (ver utils/reglasCategorias.js). Junior Dragster se
+  // configura solo la primera vez que se crean las columnas: máximo 14 años y
+  // no combinable con otra categoría. Después lo controla el admin.
+  const reglasNuevas = !(await columnaExiste("categorias", "edad_maxima"));
+  await addColIfMissing("categorias", "edad_minima",        "TINYINT UNSIGNED NULL");
+  await addColIfMissing("categorias", "edad_maxima",        "TINYINT UNSIGNED NULL");
+  await addColIfMissing("categorias", "exclusiva",          "TINYINT(1) NOT NULL DEFAULT 0");
+  if (reglasNuevas) {
+    await db.query("UPDATE categorias SET edad_maxima = 14, exclusiva = 1 WHERE UPPER(nombre) = 'JUNIOR DRAGSTER'")
+      .catch(err => console.warn(`  ⚠️  No se pudieron configurar las reglas de Junior Dragster: ${err.message}`));
+  }
   await addColIfMissing("pilotos", "password",              "VARCHAR(255) NULL");
   await addColIfMissing("pilotos", "foto_vehiculo",         "VARCHAR(300) NULL");
   await addColIfMissing("pilotos", "reset_token_hash",      "VARCHAR(64) NULL");
