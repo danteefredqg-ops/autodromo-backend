@@ -12,8 +12,14 @@ if (!JWT_SECRET) {
   );
 }
 
+// Solo cuentan los intentos FALLIDOS (skipSuccessfulRequests): el límite es
+// para frenar a quien adivina contraseñas, no a la gente que entra bien. En un
+// evento muchas personas comparten la IP pública del WiFi del autódromo y, si
+// contaran también los logins correctos, 15 pilotos entrando en 15 minutos
+// bloquearían al resto.
 const loginLimit = rateLimit({
   windowMs: 15 * 60 * 1000, max: 15, standardHeaders: true, legacyHeaders: false,
+  skipSuccessfulRequests: true,
   message: { error: "Demasiados intentos. Intenta en 15 minutos." },
 });
 

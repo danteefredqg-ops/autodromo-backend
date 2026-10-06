@@ -10,6 +10,15 @@ const { iniciarProgramadorBackup } = require("./configuracion/backup");
 const app  = express();
 const PORT = process.env.PORT || 3001;
 
+// Railway pone un proxy (su edge) delante del servidor y manda la IP real del
+// visitante en X-Forwarded-For. Sin esto, req.ip era la IP del proxy para
+// TODOS: los límites de intentos (login, auto-registro, recuperar contraseña)
+// se compartían entre todos los usuarios — 15 logins de personas distintas en
+// 15 min y a todos les salía "Demasiados intentos". Es 1 salto: el dominio
+// apunta directo a Railway (sin Cloudflare como proxy); si algún día se pone
+// otro proxy delante, este número tiene que subir.
+app.set("trust proxy", 1);
+
 const ENV_REQUERIDOS = ["MYSQLHOST", "MYSQLUSER", "MYSQLPASSWORD", "MYSQLDATABASE"];
 const faltantes = ENV_REQUERIDOS.filter(v => !process.env[v]);
 if (faltantes.length)      console.warn(`⚠️  Variables faltantes: ${faltantes.join(", ")}`);
@@ -34,8 +43,11 @@ app.use(cors({
     if (!origin || origenesPermitidos.length === 0 || origenesPermitidos.includes(origin)) {
       return callback(null, true);
     }
+    // Sin lanzar error: se responde sin los encabezados CORS y el navegador
+    // bloquea la respuesta igual. Lanzarlo llenaba el log con un stack trace
+    // por cada intento (y devolvía un 500) sin aportar nada.
     console.warn(`⚠️  CORS bloqueó una petición desde un origen no permitido: ${origin}`);
-    callback(new Error("No permitido por CORS"));
+    callback(null, false);
   },
   credentials: true,
 }));
