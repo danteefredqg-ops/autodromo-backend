@@ -51,7 +51,7 @@ function bd({ piloto = null, yaInscrito = [] } = {}) {
     if (/FROM categorias WHERE id IN/.test(sql)) return [JR, BRK].filter(c => params[0].includes(c.id));
     if (/FROM inscripciones i JOIN categorias cat/.test(sql)) return yaInscrito;
     if (/SELECT \* FROM pilotos WHERE email = \?/.test(sql)) return piloto ? [piloto] : [];
-    if (/SELECT id FROM pilotos WHERE numero_piloto = \?/.test(sql)) return [];
+    if (/SELECT id FROM pilotos WHERE numero_piloto = \? OR numero_piloto_anterior = \?/.test(sql)) return [];
     if (/INSERT INTO pilotos/.test(sql)) return { insertId: 50, affectedRows: 1 };
     if (/SELECT \* FROM pilotos WHERE id = \?/.test(sql)) return [{ id: 50, numero_piloto: 77, fecha_nacimiento: "2014-01-01" }];
     if (/FROM contratos_anuales/.test(sql)) return [{ id: 1 }];
@@ -128,7 +128,7 @@ test("Categorías normales: varias en un envío crean una inscripción por categ
 function bdStaff({ numeroPiloto = null, numeroUsado = false, yaInscrito = [] } = {}) {
   return (sql, params = []) => {
     if (/SELECT numero_piloto, fecha_nacimiento FROM pilotos/.test(sql)) return [{ numero_piloto: numeroPiloto, fecha_nacimiento: "2013-03-03" }];
-    if (/SELECT id FROM pilotos WHERE numero_piloto = \? AND id <> \?/.test(sql)) return numeroUsado ? [{ id: 99 }] : [];
+    if (/SELECT id FROM pilotos WHERE \(numero_piloto = \? OR numero_piloto_anterior = \?\) AND id <> \?/.test(sql)) return numeroUsado ? [{ id: 99 }] : [];
     if (/SELECT campeonato_id, fecha FROM etapas/.test(sql)) return [{ campeonato_id: 1, fecha: "2026-10-11" }];
     if (/FROM categorias WHERE id IN/.test(sql)) return [JR, BRK, { ...BRK, id: 11, nombre: "PONY 1" }].filter(c => params[0].includes(c.id));
     if (/FROM inscripciones i JOIN categorias cat/.test(sql)) return yaInscrito;

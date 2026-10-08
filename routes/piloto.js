@@ -11,12 +11,15 @@ const { PILOTOS_DIR, PREPARADORES_DIR } = require("../configuracion/uploads");
 const { enviarCorreo, correoRecuperacion } = require("../configuracion/mailer");
 const { telefonoValido, limpiarTelefono, curpValido } = require("../utils/validadores");
 const { sinSecretos } = require("../utils/sanitizar");
+const { anioMx } = require("../utils/fechas");
 
 const uploadFoto = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, PILOTOS_DIR),
     filename: (req, file, cb) => {
-      const ext = path.extname(file.originalname).toLowerCase() || ".jpg";
+      // Extensión según el tipo de imagen validado, NUNCA la del nombre que manda el
+      // usuario: con "ataque.html" se guardaba un .html ejecutable en el dominio del API.
+      const ext = { "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp" }[file.mimetype] || ".jpg";
       cb(null, `${req.piloto.id}${ext}`);
     },
   }),
@@ -32,7 +35,9 @@ const uploadFotoPreparador = multer({
     destination: (req, file, cb) => cb(null, PREPARADORES_DIR),
     filename: (req, file, cb) => {
       if (!/^\d+$/.test(req.params.id)) return cb(new Error("ID de preparador inválido"));
-      const ext = path.extname(file.originalname).toLowerCase() || ".jpg";
+      // Extensión según el tipo de imagen validado, NUNCA la del nombre que manda el
+      // usuario: con "ataque.html" se guardaba un .html ejecutable en el dominio del API.
+      const ext = { "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp" }[file.mimetype] || ".jpg";
       cb(null, `${req.params.id}${ext}`);
     },
   }),
@@ -275,7 +280,7 @@ router.patch("/mi-perfil", autenticarPiloto, async (req, res) => {
       'curp','escolaridad','lugar_nacimiento','calle','colonia','cp','num_ext','num_int',
       'parentesco_emergencia','alergias','condiciones_medicas','comision_nacional','nombre_equipo',
       'anio_licencia_anterior','anio_inicio_autodromo','ciudad','estado','nacionalidad','fecha_nacimiento'];
-    const anioActual = new Date().getFullYear();
+    const anioActual = anioMx();
     for (const campoAnio of ['anio_licencia_anterior', 'anio_inicio_autodromo']) {
       if (req.body[campoAnio] !== undefined && req.body[campoAnio] !== null && req.body[campoAnio] !== '') {
         const anio = Number(req.body[campoAnio]);
@@ -395,7 +400,7 @@ router.post("/mis-preparadores", autenticarPiloto, async (req, res) => {
 // PUT /api/piloto/mis-preparadores/:id
 router.put("/mis-preparadores/:id", autenticarPiloto, async (req, res) => {
   try {
-    const [check] = await db.query("SELECT id FROM preparadores WHERE id = ? AND piloto_id = ?", [req.params.id, req.piloto.id]);
+    const [check] = await db.query("SELECT id FROM preparadores WHERE id = ? AND piloto_id = ? AND activo = 1", [req.params.id, req.piloto.id]);
     if (check.length === 0) return res.status(404).json({ error: "Preparador no encontrado" });
     const { apellido_paterno, apellido_materno, nombres } = req.body;
     if (!apellido_paterno || !nombres) return res.status(400).json({ error: "Apellido paterno y nombres son requeridos" });
@@ -415,7 +420,7 @@ router.put("/mis-preparadores/:id", autenticarPiloto, async (req, res) => {
 // DELETE /api/piloto/mis-preparadores/:id
 router.delete("/mis-preparadores/:id", autenticarPiloto, async (req, res) => {
   try {
-    const [check] = await db.query("SELECT id FROM preparadores WHERE id = ? AND piloto_id = ?", [req.params.id, req.piloto.id]);
+    const [check] = await db.query("SELECT id FROM preparadores WHERE id = ? AND piloto_id = ? AND activo = 1", [req.params.id, req.piloto.id]);
     if (check.length === 0) return res.status(404).json({ error: "Preparador no encontrado" });
     await db.query("UPDATE preparadores SET activo = 0 WHERE id = ?", [req.params.id]);
     res.json({ mensaje: "Preparador eliminado" });
@@ -425,7 +430,7 @@ router.delete("/mis-preparadores/:id", autenticarPiloto, async (req, res) => {
 // POST /api/piloto/mis-preparadores/:id/foto
 router.post("/mis-preparadores/:id/foto", autenticarPiloto, async (req, res) => {
   try {
-    const [check] = await db.query("SELECT id FROM preparadores WHERE id = ? AND piloto_id = ?", [req.params.id, req.piloto.id]);
+    const [check] = await db.query("SELECT id FROM preparadores WHERE id = ? AND piloto_id = ? AND activo = 1", [req.params.id, req.piloto.id]);
     if (check.length === 0) return res.status(404).json({ error: "Preparador no encontrado" });
   } catch {
     return res.status(500).json({ error: "Error al verificar preparador" });

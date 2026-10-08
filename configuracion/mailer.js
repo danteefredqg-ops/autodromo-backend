@@ -22,12 +22,15 @@ async function enviarCorreo({ to, subject, html, attachments }) {
   }
 }
 
+// El nombre lo escribe el propio piloto: se escapa para que no pueda meter HTML en el correo.
+const escHtml = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
 function correoRecuperacion(nombre, link) {
   return `
     <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px">
       <h2 style="color:#c1121f;margin-bottom:4px">Autódromo Monterrey</h2>
       <p style="color:#555;font-size:0.9rem;margin-top:0">Recuperación de contraseña</p>
-      <p>Hola${nombre ? " " + nombre : ""},</p>
+      <p>Hola${nombre ? " " + escHtml(nombre) : ""},</p>
       <p>Recibimos una solicitud para restablecer la contraseña de tu cuenta de piloto. Si tú la pediste, da clic en el siguiente botón:</p>
       <p style="text-align:center;margin:28px 0">
         <a href="${link}" style="background:#c1121f;color:#fff;padding:12px 28px;border-radius:6px;text-decoration:none;font-weight:bold;display:inline-block">Restablecer contraseña</a>

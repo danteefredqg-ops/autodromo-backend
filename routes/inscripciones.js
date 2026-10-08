@@ -3,6 +3,7 @@ const db     = require("../configuracion/db");
 const { autenticar, autorizar, autoRegistroLimit } = require("../middleware/auth");
 const { telefonoValido, limpiarTelefono, vehiculoValido } = require("../utils/validadores");
 const { validarReglasCategorias } = require("../utils/reglasCategorias");
+const { hoyMx, anioMx, mesMx } = require("../utils/fechas");
 
 // GET /api/inscripciones
 router.get("/", autenticar, async (req, res) => {
@@ -98,7 +99,7 @@ router.post("/", autenticar, autorizar("admin", "inscripciones"), async (req, re
     // Piloto sin número todavía: el número elegido no puede ser de otro piloto.
     // Antes no se revisaba y se podía inscribir a alguien con un número ajeno.
     if (!pil[0].numero_piloto) {
-      const [usado] = await db.query("SELECT id FROM pilotos WHERE numero_piloto = ? AND id <> ? LIMIT 1", [numero, piloto_id]);
+      const [usado] = await db.query("SELECT id FROM pilotos WHERE (numero_piloto = ? OR numero_piloto_anterior = ?) AND id <> ? LIMIT 1", [numero, numero, piloto_id]);
       if (usado.length > 0) return res.status(409).json({ error: `El número ${numero} ya está asignado a otro piloto` });
     }
     let campId = directCampId;
@@ -191,10 +192,21 @@ router.patch("/:id/pagar", autenticar, autorizar("admin", "inscripciones"), asyn
       if (!Number.isFinite(monto) || monto < 0) return res.status(400).json({ error: "Monto inválido" });
     }
     const [upd] = await db.query(
-      "UPDATE inscripciones SET estatus='Pagado', metodo_pago=?, monto_pago=?, pagado_en=NOW(), pagado_por=? WHERE id=?",
+      // Solo si sigue Pendiente: dos personas cobrando la misma inscripción desde
+      // pestañas distintas (lista sin recargar) hacían que el segundo cobro
+      // sobrescribiera al primero y en caja entraba dinero sin registro.
+      "UPDATE inscripciones SET estatus='Pagado', metodo_pago=?, monto_pago=?, pagado_en=NOW(), pagado_por=? WHERE id=? AND estatus = 'Pendiente'",
       [metodo, monto, req.usuario.username, req.params.id]
     );
-    if (upd.affectedRows === 0) return res.status(404).json({ error: "Inscripción no encontrada" });
+    if (upd.affectedRows === 0) {
+      const [act] = await db.query("SELECT estatus, pagado_por FROM inscripciones WHERE id = ? LIMIT 1", [req.params.id]);
+      if (act.length === 0) return res.status(404).json({ error: "Inscripción no encontrada" });
+      return res.status(409).json({
+        error: act[0].estatus === "Pagado"
+          ? `Esta inscripción ya fue cobrada${act[0].pagado_por ? ` por ${act[0].pagado_por}` : ""}. Recarga la lista.`
+          : `Esta inscripción está ${act[0].estatus}; no se puede cobrar.`,
+      });
+    }
     const [rows] = await db.query(
       `SELECT i.*, p.nombre_completo AS piloto_nombre, cat.nombre AS categoria_nombre
        FROM inscripciones i
@@ -315,18 +327,19 @@ router.post("/auto-registro", autoRegistroLimit, async (req, res) => {
       fechaCarrera = etRow[0].fecha;
       // No usar CURDATE(): el servidor de MySQL puede correr en UTC y desfasar
       // la fecha varias horas respecto a Monterrey (UTC-6 fijo, sin horario de verano).
-      const hoyMx = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const hoy = hoyMx();
       const { fecha_apertura_inscripcion: apertura, fecha_cierre_inscripcion: cierre } = etRow[0];
-      if (apertura && hoyMx < apertura.toISOString().slice(0, 10)) {
+      if (apertura && hoy < apertura.toISOString().slice(0, 10)) {
         return res.status(403).json({ error: "Las inscripciones para esta etapa aún no abren" });
       }
-      if (cierre && hoyMx > cierre.toISOString().slice(0, 10)) {
+      if (cierre && hoy > cierre.toISOString().slice(0, 10)) {
         return res.status(403).json({ error: "Las inscripciones para esta etapa ya cerraron" });
       }
     }
 
-    const ahora   = new Date();
-    const esMarzo = ahora.getMonth() >= 2;
+    // Mes/año de Monterrey (el servidor está en UTC: el 31 de dic a las 6 pm ya
+    // "era" año nuevo y pedía el contrato del año siguiente).
+    const esMarzo = mesMx() >= 3;
 
     let piloto = null;
     if (email) {
@@ -360,7 +373,7 @@ router.post("/auto-registro", autoRegistroLimit, async (req, res) => {
     }
 
     if (numero_piloto && (!piloto || !piloto.numero_piloto)) {
-      const [numUsado] = await db.query("SELECT id FROM pilotos WHERE numero_piloto = ? LIMIT 1", [numero_piloto]);
+      const [numUsado] = await db.query("SELECT id FROM pilotos WHERE numero_piloto = ? OR numero_piloto_anterior = ? LIMIT 1", [numero_piloto, numero_piloto]);
       if (numUsado.length > 0) {
         return res.status(409).json({ error: `El número ${numero_piloto} ya está asignado a otro piloto` });
       }
@@ -423,7 +436,7 @@ router.post("/auto-registro", autoRegistroLimit, async (req, res) => {
     }
 
     const piloto_id  = piloto.id;
-    const anioActual = ahora.getFullYear();
+    const anioActual = anioMx();
 
     const [contratoExiste] = await db.query(
       "SELECT id FROM contratos_anuales WHERE piloto_id = ? AND anio = ? AND activo = 1 LIMIT 1",
@@ -439,7 +452,7 @@ router.post("/auto-registro", autoRegistroLimit, async (req, res) => {
     }
 
     if (contrato_aceptado && !tieneContrato) {
-      const ip = (req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").toString().split(",")[0].trim();
+      const ip = req.ip; // IP real (ver "trust proxy" en server.js); X-Forwarded-For lo puede inventar el cliente
       await db.query(
         "INSERT INTO contratos_anuales (piloto_id,anio,ip_firma) VALUES (?,?,?) ON DUPLICATE KEY UPDATE fecha_firma=NOW(), activo=1",
         [piloto_id, anioActual, ip]

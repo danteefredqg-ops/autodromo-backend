@@ -21,6 +21,8 @@ router.post("/", autenticar, autorizar("admin"), async (req, res) => {
   try {
     const { nombre, descripcion, color, costo_default } = req.body;
     if (!nombre || !nombre.trim()) return res.status(400).json({ error: "Nombre requerido" });
+    // El color se pinta directo en estilos de varias pantallas: solo "#rrggbb".
+    if (color && !/^#[0-9a-fA-F]{6}$/.test(color)) return res.status(400).json({ error: "Color inválido (usa formato #rrggbb)" });
     const reglas = leerReglasCategoria(req.body);
     if (reglas.error) return res.status(400).json({ error: reglas.error });
     const { edad_minima, edad_maxima, exclusiva } = reglas.valores;
@@ -41,6 +43,8 @@ router.put("/:id", autenticar, autorizar("admin"), async (req, res) => {
   try {
     const { nombre, descripcion, color, costo_default } = req.body;
     if (!nombre || !nombre.trim()) return res.status(400).json({ error: "Nombre requerido" });
+    // El color se pinta directo en estilos de varias pantallas: solo "#rrggbb".
+    if (color && !/^#[0-9a-fA-F]{6}$/.test(color)) return res.status(400).json({ error: "Color inválido (usa formato #rrggbb)" });
     const [actual] = await db.query("SELECT * FROM categorias WHERE id = ? LIMIT 1", [req.params.id]);
     if (actual.length === 0) return res.status(404).json({ error: "Categoría no encontrada" });
     // Campos que no vienen en el body se conservan: el modal no manda la
@@ -71,7 +75,15 @@ router.put("/:id", autenticar, autorizar("admin"), async (req, res) => {
 // crearla tronaba con "Categoría ya existe" aunque ya no apareciera en
 // ninguna lista. Se mutila el nombre al desactivar para liberarlo.
 router.delete("/:id", autenticar, autorizar("admin"), async (req, res) => {
-  const conn = await db.getConnection();
+  // getConnection también puede fallar (BD caída o saturada): va dentro de un
+  // try — fuera de él, ese error era una promesa sin manejar que tumbaba el proceso.
+  let conn;
+  try {
+    conn = await db.getConnection();
+  } catch (err) {
+    console.error(err);
+    return res.status(503).json({ error: "Base de datos no disponible, intenta de nuevo" });
+  }
   try {
     const [existe] = await conn.query("SELECT id, nombre FROM categorias WHERE id = ? AND activo = 1 LIMIT 1", [req.params.id]);
     if (existe.length === 0) return res.status(404).json({ error: "Categoría no encontrada" });
@@ -83,8 +95,9 @@ router.delete("/:id", autenticar, autorizar("admin"), async (req, res) => {
     await conn.query("DELETE FROM campeonato_categorias WHERE categoria_id = ?", [req.params.id]);
     await conn.commit();
     res.json({ mensaje: "Categoría eliminada" });
-  } catch {
-    await conn.rollback();
+  } catch (err) {
+    console.error(err);
+    await conn.rollback().catch(() => {});
     res.status(500).json({ error: "Error al eliminar categoría" });
   } finally {
     conn.release();

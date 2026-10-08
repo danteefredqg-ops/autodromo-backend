@@ -5,6 +5,8 @@ const db      = require("./configuracion/db");
 const { UPLOADS_DIR } = require("./configuracion/uploads");
 
 const { inicializarBD } = require("./db/init");
+const { manejarErrores } = require("./middleware/errores");
+const { validarTipos } = require("./middleware/validarTipos");
 const { iniciarProgramadorBackup } = require("./configuracion/backup");
 
 const app  = express();
@@ -18,6 +20,8 @@ const PORT = process.env.PORT || 3001;
 // apunta directo a Railway (sin Cloudflare como proxy); si algún día se pone
 // otro proxy delante, este número tiene que subir.
 app.set("trust proxy", 1);
+// No anunciar en cada respuesta que el servidor es Express (pista gratis para un atacante).
+app.disable("x-powered-by");
 
 const ENV_REQUERIDOS = ["MYSQLHOST", "MYSQLUSER", "MYSQLPASSWORD", "MYSQLDATABASE"];
 const faltantes = ENV_REQUERIDOS.filter(v => !process.env[v]);
@@ -52,7 +56,12 @@ app.use(cors({
   credentials: true,
 }));
 app.use(express.json());
-app.use("/uploads", express.static(UPLOADS_DIR));
+app.use(validarTipos); // tipos de dato del body antes de llegar a las rutas (ver middleware/validarTipos.js)
+// nosniff: el navegador respeta el tipo (imagen) y no "adivina" HTML por el
+// contenido aunque alguien logre subir algo disfrazado de imagen.
+app.use("/uploads", express.static(UPLOADS_DIR, {
+  setHeaders: (res) => res.set("X-Content-Type-Options", "nosniff"),
+}));
 
 // ─── Health ───────────────────────────────────────────────────────────────────
 app.get("/api/health", async (req, res) => {
@@ -83,14 +92,32 @@ app.use("/api/imagenes-registro", require("./routes/imagenes"));
 // ─── 404 ──────────────────────────────────────────────────────────────────────
 app.use((req, res) => res.status(404).json({ error: "Ruta no encontrada" }));
 
+// ─── Errores no atrapados por las rutas (JSON mal formado, etc.) ─────────────
+app.use(manejarErrores);
+
+// Red de seguridad: una promesa rechazada sin catch en alguna ruta tumbaba el
+// proceso entero (Node lo termina por defecto) y Railway lo reiniciaba,
+// cortando a todos los que estuvieran usando el sistema. Se registra y sigue.
+process.on("unhandledRejection", (err) => {
+  console.error("❌ Promesa rechazada sin manejar:", err);
+});
+
 // ─── Arrancar ─────────────────────────────────────────────────────────────────
 inicializarBD()
   .then(() => {
-    app.listen(PORT, () => {
+    const servidor = app.listen(PORT, () => {
       console.log(`\n🏁 Autódromo Monterrey API`);
       console.log(`🚀 Puerto: ${PORT}`);
       console.log(`📦 Listo\n`);
       iniciarProgramadorBackup();
+    });
+    // En cada deploy Railway manda SIGTERM al proceso viejo: se dejan terminar
+    // las peticiones en curso (p.ej. un registro a medio guardar) antes de salir,
+    // en vez de cortarlas. Si algo se cuelga, se sale igual a los 10 s.
+    process.on("SIGTERM", () => {
+      console.log("🛑 SIGTERM recibido — cerrando sin cortar peticiones en curso...");
+      servidor.close(() => db.end().catch(() => {}).finally(() => process.exit(0)));
+      setTimeout(() => process.exit(0), 10000).unref();
     });
   })
   .catch(err => {

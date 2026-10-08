@@ -25,7 +25,7 @@ function edadEn(fechaNacimiento, fechaRef) {
   return edad;
 }
 
-const hoyMx = () => new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString().slice(0, 10);
+const { hoyMx } = require("./fechas");
 
 // Devuelve un mensaje de error (string) si alguna regla no se cumple, o null.
 //   conn            conexión/pool con .query (usar la de la transacción)

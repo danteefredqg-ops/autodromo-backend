@@ -1,6 +1,7 @@
 const router = require("express").Router();
 const db     = require("../configuracion/db");
 const { autenticar, autorizar } = require("../middleware/auth");
+const { hoyMx } = require("../utils/fechas");
 
 // ─── Campeonatos ──────────────────────────────────────────────────────────────
 
@@ -11,8 +12,9 @@ router.get("/", async (req, res) => {
       `SELECT c.*,
         (SELECT COUNT(*) FROM etapas e WHERE e.campeonato_id = c.id AND e.activo = 1) AS total_etapas,
         (SELECT COUNT(*) FROM inscripciones i JOIN etapas e ON e.id = i.etapa_id WHERE e.campeonato_id = c.id) AS total_inscritos,
-        (SELECT e.numero FROM etapas e WHERE e.campeonato_id = c.id AND e.activo = 1 AND e.fecha <= CURDATE() ORDER BY e.fecha DESC, e.numero DESC LIMIT 1) AS etapa_actual_num
-       FROM campeonatos c WHERE c.activo = 1 ORDER BY c.creado_en DESC`
+        (SELECT e.numero FROM etapas e WHERE e.campeonato_id = c.id AND e.activo = 1 AND e.fecha <= ? ORDER BY e.fecha DESC, e.numero DESC LIMIT 1) AS etapa_actual_num
+       FROM campeonatos c WHERE c.activo = 1 ORDER BY c.creado_en DESC`,
+      [hoyMx()]
     );
     const [catRows] = await db.query(
       `SELECT cc.campeonato_id, cc.costo, cat.id, cat.nombre, cat.color
@@ -71,10 +73,10 @@ router.get("/:id/etapas", async (req, res) => {
       // No usar CURDATE(): el servidor de MySQL puede correr en UTC y desfasar
       // la fecha varias horas respecto a Monterrey (México ya no usa horario
       // de verano, es UTC-6 fijo).
-      const hoyMx = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const hoy = hoyMx();
       sql += ` AND (e.fecha_apertura_inscripcion IS NULL OR ? >= e.fecha_apertura_inscripcion)
                 AND (e.fecha_cierre_inscripcion   IS NULL OR ? <= e.fecha_cierre_inscripcion)`;
-      params.push(hoyMx, hoyMx);
+      params.push(hoy, hoy);
     }
     sql += " ORDER BY e.numero ASC";
     const [rows] = await db.query(sql, params);

@@ -16,7 +16,22 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || "secreto-solo-para-pruebas";
 const consultas = [];
 let manejadores = [];
 
+// Usuarios del sistema "existentes" para el chequeo de sesión de autenticar():
+// el id del token indica el rol (ver tokenSistema). Los ids en `inactivos` se
+// responden como desactivados.
+const ROL_POR_ID = { 1: "admin", 2: "inscripciones", 3: "torre" };
+const inactivos = new Set();
+
 function responder(sql, params) {
+  // Chequeos de sesión de middleware/auth.js (no se registran en `consultas`
+  // para no estorbar a las pruebas que cuentan consultas).
+  if (/^SELECT id, username, nombre, rol, activo FROM usuarios WHERE id = \?/.test(sql)) {
+    const id = Number(params[0]);
+    return ROL_POR_ID[id] ? [{ id, username: `usuario_${ROL_POR_ID[id]}`, nombre: "Prueba", rol: ROL_POR_ID[id], activo: inactivos.has(id) ? 0 : 1 }] : [];
+  }
+  if (/^SELECT id, activo FROM pilotos WHERE id = \?/.test(sql)) {
+    return [{ id: Number(params[0]), activo: inactivos.has(`piloto:${params[0]}`) ? 0 : 1 }];
+  }
   consultas.push({ sql, params });
   for (const m of manejadores) {
     const r = m(sql, params);
@@ -45,7 +60,9 @@ require.cache[rutaDb] = { id: rutaDb, filename: rutaDb, loaded: true, exports: d
 function crearApp() {
   const express = require("express");
   const app = express();
+  app.set("trust proxy", 1); // igual que server.js
   app.use(express.json());
+  app.use(require(path.join(__dirname, "..", "..", "middleware", "validarTipos")).validarTipos);
   const r = (n) => require(path.join(__dirname, "..", "..", "routes", n));
   app.use("/api/auth",          r("auth"));
   app.use("/api/pilotos",       r("pilotos"));
@@ -60,6 +77,7 @@ function crearApp() {
   app.use("/api/piloto",        r("piloto"));
   app.use("/api/resultados",    r("resultados"));
   app.use("/api/imagenes-registro", r("imagenes"));
+  app.use(require(path.join(__dirname, "..", "..", "middleware", "errores")).manejarErrores);
   return app;
 }
 
@@ -81,19 +99,22 @@ async function detener() {
 
 function reiniciar(...nuevos) {
   consultas.length = 0;
+  inactivos.clear();
   manejadores = nuevos;
 }
 
 function tokenSistema(rol, extra = {}) {
-  return jwt.sign({ id: 1, username: `usuario_${rol}`, rol, nombre: "Prueba", ...extra }, process.env.JWT_SECRET);
+  // El id corresponde al rol en ROL_POR_ID: autenticar() toma el rol de la BD, no del token.
+  const id = Number(Object.keys(ROL_POR_ID).find(k => ROL_POR_ID[k] === rol)) || 99;
+  return jwt.sign({ id, username: `usuario_${rol}`, rol, nombre: "Prueba", ...extra }, process.env.JWT_SECRET);
 }
 
 function tokenPiloto(id = 1) {
   return jwt.sign({ id, numero: 7, tipo: "piloto" }, process.env.JWT_SECRET);
 }
 
-async function pedir(metodo, ruta, { token, body } = {}) {
-  const headers = { "Content-Type": "application/json" };
+async function pedir(metodo, ruta, { token, body, headers: extra } = {}) {
+  const headers = { "Content-Type": "application/json", ...extra };
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(`${base}${ruta}`, { method: metodo, headers, body: body ? JSON.stringify(body) : undefined });
   let data = null;
@@ -103,4 +124,4 @@ async function pedir(metodo, ruta, { token, body } = {}) {
 
 const buscar = (patron) => consultas.filter(c => patron.test(c.sql));
 
-module.exports = { dbFalsa, consultas, iniciar, detener, reiniciar, tokenSistema, tokenPiloto, pedir, buscar };
+module.exports = { dbFalsa, consultas, inactivos, iniciar, detener, reiniciar, tokenSistema, tokenPiloto, pedir, buscar };

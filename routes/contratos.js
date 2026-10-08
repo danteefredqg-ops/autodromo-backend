@@ -1,6 +1,7 @@
 const router = require("express").Router();
 const db     = require("../configuracion/db");
 const { autoRegistroLimit } = require("../middleware/auth");
+const { anioMx } = require("../utils/fechas");
 
 // GET /api/contratos/estado
 router.get("/estado", async (req, res) => {
@@ -27,12 +28,18 @@ router.post("/firmar", autoRegistroLimit, async (req, res) => {
     if (!piloto_id || !anio || !email || !numero) {
       return res.status(400).json({ error: "piloto_id, anio, email y numero requeridos" });
     }
+    // Solo el contrato del año en curso (o el siguiente, por si firma en los
+    // últimos días de diciembre) — antes se podía "firmar" el de cualquier año.
+    const anioNum = parseInt(anio);
+    if (anioNum !== anioMx() && anioNum !== anioMx() + 1) {
+      return res.status(400).json({ error: "Año de contrato inválido" });
+    }
     const [match] = await db.query(
       "SELECT id FROM pilotos WHERE id = ? AND email = ? AND numero_piloto = ? AND activo = 1 LIMIT 1",
       [piloto_id, String(email).trim().toLowerCase(), parseInt(numero)]
     );
     if (match.length === 0) return res.status(403).json({ error: "No se pudo verificar la identidad del piloto" });
-    const ip = (req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").toString().split(",")[0].trim();
+    const ip = req.ip; // IP real (ver "trust proxy" en server.js); X-Forwarded-For lo puede inventar el cliente
     await db.query(
       "INSERT INTO contratos_anuales (piloto_id,anio,ip_firma) VALUES (?,?,?) ON DUPLICATE KEY UPDATE fecha_firma=NOW(), ip_firma=?, activo=1",
       [piloto_id, anio, ip, ip]

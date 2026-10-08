@@ -7,13 +7,16 @@ const { autenticar, autorizar, autoRegistroLimit } = require("../middleware/auth
 const { PILOTOS_DIR } = require("../configuracion/uploads");
 const { telefonoValido, limpiarTelefono, curpValido } = require("../utils/validadores");
 const { sinSecretos } = require("../utils/sanitizar");
+const { anioMx, hoyMx } = require("../utils/fechas");
 
 const uploadFoto = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, PILOTOS_DIR),
     filename: (req, file, cb) => {
       if (!/^\d+$/.test(req.params.id)) return cb(new Error("ID de piloto inválido"));
-      const ext = path.extname(file.originalname).toLowerCase() || ".jpg";
+      // Extensión según el tipo de imagen validado, NUNCA la del nombre que manda el
+      // usuario: con "ataque.html" se guardaba un .html ejecutable en el dominio del API.
+      const ext = { "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp" }[file.mimetype] || ".jpg";
       cb(null, `${req.params.id}${ext}`);
     },
   }),
@@ -67,9 +70,9 @@ router.get("/", autenticar, async (req, res) => {
         (SELECT MAX(e.fecha) FROM inscripciones i3 JOIN etapas e ON e.id = i3.etapa_id
          WHERE i3.piloto_id = p.id) AS ultima_carrera_fecha,
         (SELECT COUNT(*) FROM inscripciones i4 JOIN etapas e2 ON e2.id = i4.etapa_id
-         WHERE i4.piloto_id = p.id AND e2.fecha >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)) AS etapas_recientes
+         WHERE i4.piloto_id = p.id AND e2.fecha >= DATE_SUB(?, INTERVAL 6 MONTH)) AS etapas_recientes
       FROM pilotos p WHERE p.activo = 1`;
-    const params = [];
+    const params = [hoyMx()]; // para "etapas_recientes" (fecha de Monterrey, no CURDATE() en UTC)
     if (estatus_licencia) { sql += " AND p.estatus_licencia = ?"; params.push(estatus_licencia); }
     if (buscar) {
       sql += ` AND (p.nombre_completo LIKE ? OR p.apellido_paterno LIKE ? OR p.apellido_materno LIKE ?
@@ -136,6 +139,11 @@ router.post("/", autenticar, autorizar("admin", "inscripciones"), async (req, re
     if (!nombre_completo) return res.status(400).json({ error: "Nombre requerido" });
     if (!telefonoValido(telefono)) return res.status(400).json({ error: "El teléfono debe tener 10 dígitos" });
     if (!telefonoValido(telefono_emergencia)) return res.status(400).json({ error: "El teléfono de emergencia debe tener 10 dígitos" });
+    // El número anterior de quien tiene el #1 está reservado para devolvérselo.
+    if (numero_piloto) {
+      const [reservado] = await db.query("SELECT id FROM pilotos WHERE numero_piloto_anterior = ? AND activo = 1 LIMIT 1", [numero_piloto]);
+      if (reservado.length) return res.status(409).json({ error: `El número ${numero_piloto} está reservado para el piloto que hoy tiene el #1` });
+    }
     const [result] = await db.query(
       `INSERT INTO pilotos
         (apellido_paterno, apellido_materno, nombres, numero_piloto, nombre_completo,
@@ -175,6 +183,11 @@ router.put("/:id", autenticar, autorizar("admin", "inscripciones"), async (req, 
     if (!nombre_completo) return res.status(400).json({ error: "Nombre requerido" });
     if (!telefonoValido(telefono)) return res.status(400).json({ error: "El teléfono debe tener 10 dígitos" });
     if (!telefonoValido(telefono_emergencia)) return res.status(400).json({ error: "El teléfono de emergencia debe tener 10 dígitos" });
+    // El número anterior de quien tiene el #1 está reservado para devolvérselo.
+    if (numero_piloto) {
+      const [reservado] = await db.query("SELECT id FROM pilotos WHERE numero_piloto_anterior = ? AND activo = 1 AND id <> ? LIMIT 1", [numero_piloto, req.params.id]);
+      if (reservado.length) return res.status(409).json({ error: `El número ${numero_piloto} está reservado para el piloto que hoy tiene el #1` });
+    }
     const [actuales] = await db.query(
       "SELECT apellido_paterno, apellido_materno, nombres FROM pilotos WHERE id = ? LIMIT 1", [req.params.id]
     );
@@ -213,24 +226,44 @@ router.put("/:id", autenticar, autorizar("admin", "inscripciones"), async (req, 
 
 // PATCH /api/pilotos/:id/numero-uno
 router.patch("/:id/numero-uno", autenticar, autorizar("admin", "inscripciones"), async (req, res) => {
+  // En una transacción: antes eran 2 UPDATE sueltos, y si el segundo fallaba el
+  // #1 quedaba sin dueño. Mientras alguien tiene el #1, su número anterior
+  // queda reservado (los chequeos de "número en uso" también miran
+  // numero_piloto_anterior), así que siempre se le puede devolver.
+  let conn;
   try {
-    const [rows] = await db.query("SELECT id, numero_piloto, numero_piloto_anterior FROM pilotos WHERE id = ? AND activo = 1 LIMIT 1", [req.params.id]);
-    if (rows.length === 0) return res.status(404).json({ error: "Piloto no encontrado" });
+    conn = await db.getConnection();
+    await conn.beginTransaction();
+    const [rows] = await conn.query("SELECT id, nombre_completo, numero_piloto, numero_piloto_anterior FROM pilotos WHERE id = ? AND activo = 1 LIMIT 1 FOR UPDATE", [req.params.id]);
+    if (rows.length === 0) { await conn.rollback(); return res.status(404).json({ error: "Piloto no encontrado" }); }
     const p = rows[0];
     if (p.numero_piloto === 1) {
       const anterior = p.numero_piloto_anterior;
-      await db.query("UPDATE pilotos SET numero_piloto = ?, numero_piloto_anterior = NULL WHERE id = ?", [anterior, p.id]);
+      // Sin número anterior se quedaba con número NULL (perdía su número).
+      if (!anterior) { await conn.rollback(); return res.status(409).json({ error: "Este piloto no tiene un número anterior registrado. Edítalo para asignarle uno." }); }
+      await conn.query("UPDATE pilotos SET numero_piloto = ?, numero_piloto_anterior = NULL WHERE id = ?", [anterior, p.id]);
+      await conn.commit();
       return res.json({ mensaje: "Número restaurado", numero_piloto: anterior });
     }
-    await db.query(
-      "UPDATE pilotos SET numero_piloto = numero_piloto_anterior, numero_piloto_anterior = NULL WHERE numero_piloto = 1 AND id != ?",
-      [p.id]
-    );
-    await db.query("UPDATE pilotos SET numero_piloto_anterior = numero_piloto, numero_piloto = 1 WHERE id = ?", [p.id]);
+    if (!p.numero_piloto) { await conn.rollback(); return res.status(409).json({ error: "Este piloto aún no tiene número asignado" }); }
+    const [campeonActual] = await conn.query("SELECT id, nombre_completo, numero_piloto_anterior FROM pilotos WHERE numero_piloto = 1 AND id != ? FOR UPDATE", [p.id]);
+    if (campeonActual.length && !campeonActual[0].numero_piloto_anterior) {
+      await conn.rollback();
+      return res.status(409).json({ error: `${campeonActual[0].nombre_completo} tiene el #1 y no tiene número anterior registrado. Edítalo primero para asignarle su número.` });
+    }
+    if (campeonActual.length) {
+      await conn.query("UPDATE pilotos SET numero_piloto = numero_piloto_anterior, numero_piloto_anterior = NULL WHERE id = ?", [campeonActual[0].id]);
+    }
+    await conn.query("UPDATE pilotos SET numero_piloto_anterior = numero_piloto, numero_piloto = 1 WHERE id = ?", [p.id]);
+    await conn.commit();
     res.json({ mensaje: "¡Número 1 asignado al campeón!", numero_piloto: 1, numero_anterior: p.numero_piloto });
   } catch (err) {
+    if (conn) await conn.rollback().catch(() => {});
+    if (err.code === "ER_DUP_ENTRY") return res.status(409).json({ error: "El número anterior ya lo tiene otro piloto. Edita los números a mano." });
     console.error(err);
     res.status(500).json({ error: "Error al cambiar número" });
+  } finally {
+    if (conn) conn.release();
   }
 });
 
@@ -310,7 +343,7 @@ router.patch("/:id/datos-formulario", autenticar, autorizar("admin", "inscripcio
     const { curp, escolaridad, lugar_nacimiento, calle, colonia, cp, num_ext, num_int,
             parentesco_emergencia, alergias, condiciones_medicas, comision_nacional,
             nombre_equipo, anio_licencia_anterior, anio_inicio_autodromo } = req.body;
-    const anioActual = new Date().getFullYear();
+    const anioActual = anioMx();
     for (const [campo, valor] of Object.entries({ anio_licencia_anterior, anio_inicio_autodromo })) {
       if (!valor) continue;
       const anio = Number(valor);

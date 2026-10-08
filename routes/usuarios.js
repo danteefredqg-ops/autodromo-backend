@@ -19,6 +19,8 @@ router.post("/", autenticar, autorizar("admin"), async (req, res) => {
     const { username, password, nombre, rol } = req.body;
     if (!username || !password || !nombre || !rol) return res.status(400).json({ error: "Todos los campos son requeridos" });
     if (!["admin", "inscripciones", "torre"].includes(rol)) return res.status(400).json({ error: "Rol inválido" });
+    // Mismo mínimo que al cambiarla (antes se podía crear un usuario con contraseña de 1 letra).
+    if (String(password).length < 6) return res.status(400).json({ error: "La contraseña debe tener al menos 6 caracteres" });
     const hash = await bcrypt.hash(password, 10);
     const [result] = await db.query(
       "INSERT INTO usuarios (username,password,nombre,rol) VALUES (?,?,?,?)",
@@ -57,7 +59,8 @@ router.patch("/:id/password", autenticar, autorizar("admin"), async (req, res) =
     const { password } = req.body;
     if (!password || password.length < 6) return res.status(400).json({ error: "Mínimo 6 caracteres" });
     const hash = await bcrypt.hash(password, 10);
-    await db.query("UPDATE usuarios SET password = ? WHERE id = ?", [hash, req.params.id]);
+    const [upd] = await db.query("UPDATE usuarios SET password = ? WHERE id = ?", [hash, req.params.id]);
+    if (upd.affectedRows === 0) return res.status(404).json({ error: "Usuario no encontrado" });
     res.json({ mensaje: "Contraseña actualizada" });
   } catch {
     res.status(500).json({ error: "Error al cambiar contraseña" });
