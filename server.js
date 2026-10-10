@@ -8,6 +8,7 @@ const { inicializarBD } = require("./db/init");
 const { manejarErrores } = require("./middleware/errores");
 const { validarTipos } = require("./middleware/validarTipos");
 const { iniciarProgramadorBackup } = require("./configuracion/backup");
+const { limpiarArchivosHuerfanos } = require("./configuracion/limpiezaUploads");
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
@@ -110,6 +111,8 @@ inicializarBD()
       console.log(`🚀 Puerto: ${PORT}`);
       console.log(`📦 Listo\n`);
       iniciarProgramadorBackup();
+      // Fotos/imágenes que ya no son de nadie (ver configuracion/limpiezaUploads.js).
+      limpiarArchivosHuerfanos(db).catch(err => console.warn(`⚠️  No se pudo limpiar uploads: ${err.message}`));
     });
     // En cada deploy Railway manda SIGTERM al proceso viejo: se dejan terminar
     // las peticiones en curso (p.ej. un registro a medio guardar) antes de salir,

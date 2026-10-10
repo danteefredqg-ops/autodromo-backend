@@ -5,12 +5,16 @@ const { escape } = require("mysql2");
 const db = require("./db");
 const { enviarCorreo } = require("./mailer");
 
-async function generarBackupSQL() {
+// `conexionExterna`: opcional, una conexión mysql2/promise ya abierta (creada
+// con dateStrings:true) — la usa scripts/vaciar-produccion.js para respaldar
+// con los datos de conexión que da quien lo corre. Si no se pasa, se conecta
+// con las variables de entorno del servidor.
+async function generarBackupSQL(conexionExterna = null) {
   // Conexión aparte (no el pool compartido) con dateStrings:true — así las
   // columnas DATE/DATETIME vuelven como el texto exacto que tiene MySQL, sin
   // que mysql2 las reinterprete como objetos Date con la zona horaria local
   // de Node (eso podía correr las fechas un día si el servidor no está en UTC).
-  const conn = await mysqlProm.createConnection({
+  const conn = conexionExterna || await mysqlProm.createConnection({
     host: process.env.MYSQLHOST,
     user: process.env.MYSQLUSER,
     password: process.env.MYSQLPASSWORD,
@@ -43,7 +47,7 @@ async function generarBackupSQL() {
     sql += "SET FOREIGN_KEY_CHECKS=1;\n";
     return sql;
   } finally {
-    await conn.end();
+    if (!conexionExterna) await conn.end(); // la externa la cierra quien la abrió
   }
 }
 
