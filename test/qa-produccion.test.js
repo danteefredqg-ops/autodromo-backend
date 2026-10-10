@@ -178,6 +178,35 @@ test("Correo de recuperación: el nombre del piloto va escapado", () => {
   assert.ok(!html.includes("<img"));
 });
 
+// ── Eliminar usuarios (pedido del cliente, octubre 2026) ─────────────────────
+test("Usuarios: el admin elimina una cuenta de staff o torre", async () => {
+  h.reiniciar((sql) => (/SELECT id, rol FROM usuarios WHERE id = \?/.test(sql) ? [{ id: 7, rol: "torre" }] : undefined));
+  const r = await h.pedir("DELETE", "/usuarios/7", { token: h.tokenSistema("admin") });
+  assert.equal(r.status, 200);
+  const [del] = h.buscar(/DELETE FROM usuarios/);
+  assert.match(del.sql, /rol <> 'admin'/, "el DELETE mismo protege a los admin");
+  assert.deepEqual(del.params, ["7"]);
+});
+
+test("Usuarios: una cuenta de administrador no se puede eliminar (ni la propia)", async () => {
+  h.reiniciar((sql) => (/SELECT id, rol FROM usuarios WHERE id = \?/.test(sql) ? [{ id: 1, rol: "admin" }] : undefined));
+  const r = await h.pedir("DELETE", "/usuarios/1", { token: h.tokenSistema("admin") });
+  assert.equal(r.status, 403);
+  assert.equal(h.buscar(/DELETE FROM usuarios/).length, 0);
+});
+
+test("Usuarios: solo el admin puede eliminar; inexistente da 404", async () => {
+  h.reiniciar();
+  assert.equal((await h.pedir("DELETE", "/usuarios/7", { token: h.tokenSistema("inscripciones") })).status, 403);
+  assert.equal((await h.pedir("DELETE", "/usuarios/7", { token: h.tokenSistema("torre") })).status, 403);
+  assert.equal((await h.pedir("DELETE", "/usuarios/999", { token: h.tokenSistema("admin") })).status, 404);
+});
+
+test("Usuarios (pantalla): el botón Eliminar no se muestra para administradores", { skip: !fs.existsSync(path.join(__dirname, "..", "..", "frontend")) }, () => {
+  const html = fs.readFileSync(path.join(__dirname, "..", "..", "frontend", "dashboard", "usuarios.html"), "utf8");
+  assert.match(html, /\$\{u\.rol !== 'admin' \? `[\s\S]*?eliminarUsuario\(\$\{u\.id\}\)/);
+});
+
 test("server.js: sin x-powered-by, con manejador de errores, red para promesas y cierre limpio", () => {
   const src = fs.readFileSync(path.join(__dirname, "..", "server.js"), "utf8");
   assert.match(src, /app\.disable\("x-powered-by"\)/);

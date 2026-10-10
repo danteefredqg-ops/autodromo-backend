@@ -53,6 +53,25 @@ router.patch("/:id/activar", autenticar, autorizar("admin"), async (req, res) =>
   }
 });
 
+// DELETE /api/usuarios/:id — solo admin. Las cuentas de administrador no se
+// pueden eliminar (ni la propia): así nunca se queda el sistema sin admin.
+// Borrado definitivo: usuarios no está ligada por llave foránea a otras tablas
+// (los cobros guardan el nombre de usuario como texto, así que el historial de
+// "cobrado por" se conserva). Su sesión deja de servir de inmediato porque
+// autenticar() revisa en la BD que el usuario exista.
+router.delete("/:id", autenticar, autorizar("admin"), async (req, res) => {
+  try {
+    const [rows] = await db.query("SELECT id, rol FROM usuarios WHERE id = ? LIMIT 1", [req.params.id]);
+    if (rows.length === 0) return res.status(404).json({ error: "Usuario no encontrado" });
+    if (rows[0].rol === "admin") return res.status(403).json({ error: "Las cuentas de administrador no se pueden eliminar" });
+    await db.query("DELETE FROM usuarios WHERE id = ? AND rol <> 'admin'", [req.params.id]);
+    res.json({ mensaje: "Usuario eliminado" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al eliminar usuario" });
+  }
+});
+
 // PATCH /api/usuarios/:id/password
 router.patch("/:id/password", autenticar, autorizar("admin"), async (req, res) => {
   try {
